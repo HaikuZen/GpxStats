@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="GpxStats sample" xmlns="http://www.topografix.com/GPX/1/1">
+  <trk>
+    <name>ride-sample</name>
+    <trkseg>
+      <trkpt lat="45.070000" lon="7.686800"><ele>240</ele><time>2026-05-01T08:00:00Z</time></trkpt>
+      <trkpt lat="45.073500" lon="7.690200"><ele>245</ele><time>2026-05-01T08:01:30Z</time></trkpt>
+      <trkpt lat="45.078900" lon="7.695500"><ele>255</ele><time>2026-05-01T08:03:30Z</time></trkpt>
+      <trkpt lat="45.084100" lon="7.702900"><ele>262</ele><time>2026-05-01T08:06:00Z</time></trkpt>
+      <trkpt lat="45.090000" lon="7.710000"><ele>270</ele><time>2026-05-01T08:09:00Z</time></trkpt>
+      <trkpt lat="45.095200" lon="7.718400"><ele>281</ele><time>2026-05-01T08:12:30Z</time></trkpt>
+      <trkpt lat="45.100000" lon="7.725000"><ele>290</ele><time>2026-05-01T08:16:00Z</time></trkpt>
+    </trkseg>
+  </trk>
+</gpx>
