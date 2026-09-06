@@ -117,11 +117,17 @@ Requirements:
 ./gradlew :app:installDebug
 ```
 
+Gradle must run on **JDK 17** (AGP 8.7 / Gradle 8.9 don't support newer JDKs). The path
+is deliberately **not** committed, so the build stays portable (F-Droid, CI). If your
+default `java` is newer, point Gradle at a JDK 17 without editing tracked files:
+
+```bash
+echo 'org.gradle.java.home=/path/to/jdk-17' >> ~/.gradle/gradle.properties
+```
+
 Machine-specific config (not committed):
 
 - `local.properties` — `sdk.dir=/path/to/Android/sdk`
-- `gradle.properties` — `org.gradle.java.home` is pinned to a JDK 17 path; adjust or
-  remove it for your environment.
 
 ### Versions
 
@@ -172,3 +178,10 @@ Data flow: picker `Uri` → `MainActivity` → `GpxStatsViewModel` → `TrackRep
 - `material-icons-extended` is pulled in for one icon and inflates the debug APK to
   ~17 MB; drop it (use a built-in icon) if size matters.
 - See `CLAUDE.md` for architecture invariants and how to extend metrics/statistics.
+
+## License
+
+[Apache License 2.0](LICENSE) — see also [`NOTICE`](NOTICE).
+
+The app requests no permissions, contains no analytics, ad, or tracking code, and makes
+no network connections — it should be a clean fit for F-Droid.

@@ -26,8 +26,10 @@ namespace: `com.januarius.gpxstats`.
 
 Toolchain (pinned):
 
-- JDK **17** to run Gradle — set in `gradle.properties` via `org.gradle.java.home`.
-  Change or remove that line on another machine.
+- Gradle must run on **JDK 17** (AGP 8.7 / Gradle 8.9 reject newer JDKs). The path is
+  **not** committed — keep it that way (portability / F-Droid). On a box whose default
+  `java` is newer, add `org.gradle.java.home=…` to `~/.gradle/gradle.properties`, never
+  to the tracked `gradle.properties`.
 - Gradle **8.9** (wrapper committed), AGP **8.7.3**, Kotlin **2.0.21**, KSP
   `2.0.21-1.0.28`.
 - Android SDK **API 35** + build-tools **35.0.0**. `local.properties` sets `sdk.dir`
@@ -169,6 +171,11 @@ Sharing: `shareDatabase()` → `_shareDbUri` → `MainActivity` `LaunchedEffect`
   (`AutoMirrored.Filled.DirectionsBike`) and inflates the APK to ~17 MB. Swap for a core
   icon and drop the dep if size matters.
 - The system Gradle on the build box is ancient (4.4.1); always use `./gradlew`.
+- The JDK 17 path lives in `~/.gradle/gradle.properties` on this box, not in the repo.
+  A fresh clone on a JDK-17-default machine needs nothing; on a newer default it fails
+  with a Gradle/JDK-support error until you add the `org.gradle.java.home` line there.
+- Licensed **Apache-2.0** (`LICENSE`, `NOTICE`). No permissions, no network, no trackers
+  — keep it that way so it stays F-Droid-eligible.
 - GPX files without `<time>` elements import fine but have `durationSeconds == 0` and
   `startTimeMillis == null` (they sort last).
 - `samples/ride-sample.gpx` is a small fixture for manual import testing.
