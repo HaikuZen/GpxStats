@@ -171,6 +171,9 @@ app/src/main/res/drawable-nodpi/mylogo.jpg   logo shown on the About page
 app/src/main/res/xml/file_paths.xml          FileProvider paths for the shared db copy
 app/src/test/.../GpxParserElevationTest.kt    JVM tests for the gain/loss maths
 samples/ride-sample.gpx                       small fixture for manual import testing
+fastlane/metadata/android/en-US/             F-Droid / store listing text + changelogs
+fdroid/com.januarius.gpxstats.yml            F-Droid build recipe (submit to fdroiddata)
+RELEASING.md                                 release checklist (versionCode is monotonic)
 ```
 
 Data flow: picker `Uri` → `MainActivity` → `GpxStatsViewModel` → `TrackRepository`
@@ -189,5 +192,10 @@ Data flow: picker `Uri` → `MainActivity` → `GpxStatsViewModel` → `TrackRep
 
 [Apache License 2.0](LICENSE) — see also [`NOTICE`](NOTICE).
 
+## F-Droid
+
 The app requests no permissions, contains no analytics, ad, or tracking code, and makes
-no network connections — it should be a clean fit for F-Droid.
+no network connections. Store text and per-release changelogs live in
+`fastlane/metadata/android/en-US/`; `fdroid/com.januarius.gpxstats.yml` is the build
+recipe to submit to [fdroiddata](https://gitlab.com/fdroid/fdroiddata). Release process
+and the monotonic-`versionCode` rule: see [`RELEASING.md`](RELEASING.md).

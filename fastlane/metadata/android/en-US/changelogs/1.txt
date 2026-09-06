@@ -1,0 +1,6 @@
+First release.
+
+Import single GPX files or sync a folder. Per-track distance, duration, moving time,
+elevation gain/loss, max speed and max altitude, stored in a local database with a
+user-assigned activity type. Statistics by activity and by week/month/year. Export and
+share the database.

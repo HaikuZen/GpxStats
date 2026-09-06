@@ -1,0 +1,6 @@
+- Settings screen (gear icon) to tune the elevation smoothing: median filter window
+  and hysteresis threshold, with a reset to defaults.
+- New About screen (overflow menu): app version, link to the source code, and the
+  list of open-source libraries used.
+- "By period" statistics now include elevation gain.
+- Determinate "N / M files" progress bar while syncing a folder.

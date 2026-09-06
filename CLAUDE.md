@@ -172,6 +172,14 @@ Sharing: `shareDatabase()` → `_shareDbUri` → `MainActivity` `LaunchedEffect`
   `addMigrations(...)` (see `MIGRATION_1_2`, `MIGRATION_2_3`). Do not rely on
   `fallbackToDestructiveMigration()` now that real users may have data — it would drop
   their activity assignments.
+- **`versionCode` is monotonic.** Every release bumps it by at least 1; it is never
+  reused or lowered once tagged/pushed (F-Droid's update key). Each release also adds
+  `fastlane/metadata/android/en-US/changelogs/<versionCode>.txt` (named by versionCode)
+  and an append-only `Builds:` entry in `fdroid/com.januarius.gpxstats.yml`. Full
+  checklist in `RELEASING.md`.
+- F-Droid store text lives in `fastlane/metadata/android/en-US/` (`title.txt`,
+  `short_description.txt` ≤80 chars, `full_description.txt` ≤4000 chars). Screenshots
+  are not committed yet — see `fastlane/README.md`.
 
 ## Gotchas
 

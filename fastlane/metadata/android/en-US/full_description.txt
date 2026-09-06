@@ -1,0 +1,41 @@
+GpxStats imports GPX tracks, stores the numbers that matter in a local database, and
+shows aggregate statistics per activity type and per time period.
+
+<b>Import</b>
+
+* Add a single .gpx file, or pick a folder and re-sync it whenever you like.
+* Folder access uses the Storage Access Framework with a persisted permission - no
+  broad storage permission is requested.
+* Re-importing a file refreshes its metrics without creating a duplicate and without
+  overwriting the activity you assigned it.
+
+<b>Per track</b>
+
+* Distance (haversine), elapsed time and moving time.
+* Elevation gain and loss, computed realistically: the elevation profile is
+  median-filtered to drop GPS spikes, then only climbs and descents larger than a
+  threshold are counted. Both the filter width and the threshold are adjustable.
+* Maximum speed and maximum altitude.
+
+<b>Activity</b>
+
+Every track gets a user-defined activity type (default: bike). Statistics can be
+grouped by it.
+
+<b>Statistics</b>
+
+* Totals: number of tracks, distance, duration, ascent/descent, average and maximum
+  speed, peak altitude.
+* Per activity type, with a total row.
+* By week, month or year, including elevation gain.
+* A "Selected" aggregate over any tracks you tick.
+
+<b>Share</b>
+
+Export a snapshot of the database to the system share sheet - send it to another
+device, a cloud drive or a file manager.
+
+<b>Privacy</b>
+
+No account, no network access, no analytics, no tracking, no advertising. The app
+requests no Android permissions.
