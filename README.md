@@ -94,11 +94,16 @@ Distance, duration, ascent and descent are summed across the group; average spee
 derived (total distance ÷ total moving time); max speed and max altitude are the highest
 values across the group.
 
-### Settings tab
+### Settings (gear icon)
 
 - **Median filter window** and **hysteresis threshold** for the elevation gain / loss
   computation (see above). Stepper controls; a *Reset to defaults* button restores
   5 points · 10 m.
+
+### About (⋮ → *Info about GpxStats*)
+
+- App version and build number, a link to the source repository, and the list of
+  open-source libraries used (all Apache-2.0).
 
 ---
 
@@ -159,12 +164,13 @@ app/src/main/java/com/januarius/gpxstats/
     SettingsStore.kt        DataStore: sync folder uri, default activity, elevation options
   ui/
     GpxStatsViewModel.kt    StateFlows + statistics aggregation (by activity + by period)
-    GpxStatsScreen.kt       Tracks + Statistics + Settings tabs
+    GpxStatsScreen.kt       Tracks / Statistics tabs + Settings & About sub-screens
     Theme.kt, Format.kt     Material 3 theme, display formatters
 
-app/src/main/res/xml/file_paths.xml   FileProvider paths for the shared db copy
-app/src/test/.../GpxParserElevationTest.kt   JVM tests for the gain/loss maths
-samples/ride-sample.gpx               small fixture for manual import testing
+app/src/main/res/drawable-nodpi/mylogo.jpg   logo shown on the About page
+app/src/main/res/xml/file_paths.xml          FileProvider paths for the shared db copy
+app/src/test/.../GpxParserElevationTest.kt    JVM tests for the gain/loss maths
+samples/ride-sample.gpx                       small fixture for manual import testing
 ```
 
 Data flow: picker `Uri` → `MainActivity` → `GpxStatsViewModel` → `TrackRepository`

@@ -98,17 +98,22 @@ ui/
                            it to the repo; runSync feeds the repo's progress callback into
                            _syncProgress. shareDatabase() -> repo.exportDatabase(), result
                            in shareDbUri.
-  GpxStatsScreen           Three tabs: "Tracks" (import controls, default-activity field,
-                           selection bar, track rows with an activity picker), "Statistics"
-                           (summary card, per-activity table + Total row, By-period table
-                           with a Week/Month/Year chip row, per-activity + Selected detail
-                           cards), "Settings" (elevation median-window + threshold
-                           steppers + reset). Compact tables show
-                           label / # / distance / duration / avg speed / ascent; the
-                           detail cards add moving / descent / max speed / max altitude.
-                           SyncStatusBar under the tab row: determinate "N / M files"
-                           during a folder sync, indeterminate for a single-file import.
-                           Top-bar Share action -> onShareDatabase.
+  GpxStatsScreen           GpxStatsScreen() is a router over a `route` Int state:
+                           MainScreen (default), SettingsScreen, AboutScreen.
+                           MainScreen — two tabs "Tracks" / "Statistics"; top bar has
+                           Share, a gear icon (-> SettingsScreen) and a ⋮ overflow with
+                           "Info about GpxStats" (-> AboutScreen). SyncStatusBar under the
+                           tab row: determinate "N / M files" during a folder sync,
+                           indeterminate for a single-file import.
+                           SettingsScreen — back arrow + the elevation median-window /
+                           threshold steppers + reset (SettingsTab content).
+                           AboutScreen — back arrow; BuildConfig.VERSION_NAME/CODE, a
+                           LocalUriHandler link to SOURCE_URL, the ABOUT_LIBRARIES list,
+                           and res/drawable-nodpi/mylogo.jpg at the bottom.
+                           SettingsScreen/AboutScreen both take a BackHandler.
+                           Stat compact tables show label / # / distance / duration /
+                           avg speed / ascent; detail cards add moving / descent / max
+                           speed / max altitude.
   Theme / Format           Material 3 theme (dynamic color on S+), display formatters.
 ```
 
@@ -134,6 +139,9 @@ Sharing: `shareDatabase()` → `_shareDbUri` → `MainActivity` `LaunchedEffect`
   `READ_EXTERNAL_STORAGE` / `MANAGE_EXTERNAL_STORAGE`.
 - Compose Material 3 experimental APIs: opt in with a file-level
   `@file:OptIn(ExperimentalMaterial3Api::class)` rather than scattered annotations.
+- `buildConfig = true` is on so `AboutScreen` can read `BuildConfig.VERSION_NAME` /
+  `VERSION_CODE`. `SOURCE_URL` (the GitHub repo) and `ABOUT_LIBRARIES` live in
+  `GpxStatsScreen.kt` — update them if the repo moves or deps change.
 - `GpxParser.parse()` depends on `android.util.Xml`, so it needs an instrumented test or
   Robolectric. But `elevationGainLoss()` is `internal` and pure (no Android types) — it
   is the right place for plain JVM unit tests of the smoothing / hysteresis maths.

@@ -2,6 +2,8 @@
 
 package com.januarius.gpxstats.ui
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -12,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -21,11 +24,15 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.DirectionsBike
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.automirrored.filled.DirectionsBike
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.AssistChip
@@ -56,19 +63,29 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.januarius.gpxstats.BuildConfig
+import com.januarius.gpxstats.R
 import com.januarius.gpxstats.data.Track
 import com.januarius.gpxstats.repo.SettingsStore
 import kotlin.math.roundToInt
+
+private const val ROUTE_MAIN = 0
+private const val ROUTE_SETTINGS = 1
+private const val ROUTE_ABOUT = 2
 
 @Composable
 fun GpxStatsScreen(
@@ -76,6 +93,31 @@ fun GpxStatsScreen(
     onPickFile: () -> Unit,
     onPickFolder: () -> Unit,
     onShareDatabase: () -> Unit
+) {
+    var route by rememberSaveable { mutableIntStateOf(ROUTE_MAIN) }
+
+    when (route) {
+        ROUTE_SETTINGS -> SettingsScreen(vm = vm, onBack = { route = ROUTE_MAIN })
+        ROUTE_ABOUT -> AboutScreen(onBack = { route = ROUTE_MAIN })
+        else -> MainScreen(
+            vm = vm,
+            onPickFile = onPickFile,
+            onPickFolder = onPickFolder,
+            onShareDatabase = onShareDatabase,
+            onOpenSettings = { route = ROUTE_SETTINGS },
+            onOpenAbout = { route = ROUTE_ABOUT }
+        )
+    }
+}
+
+@Composable
+private fun MainScreen(
+    vm: GpxStatsViewModel,
+    onPickFile: () -> Unit,
+    onPickFolder: () -> Unit,
+    onShareDatabase: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenAbout: () -> Unit
 ) {
     val tracks by vm.tracks.collectAsStateWithLifecycle()
     val selected by vm.selected.collectAsStateWithLifecycle()
@@ -86,8 +128,6 @@ fun GpxStatsScreen(
     val defaultActivity by vm.defaultActivity.collectAsStateWithLifecycle()
     val syncFolder by vm.syncFolderUri.collectAsStateWithLifecycle()
     val knownActivities by vm.knownActivities.collectAsStateWithLifecycle()
-    val medianWindow by vm.elevationMedianWindow.collectAsStateWithLifecycle()
-    val thresholdMeters by vm.elevationThresholdMeters.collectAsStateWithLifecycle()
 
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(message) {
@@ -98,7 +138,8 @@ fun GpxStatsScreen(
     }
 
     var tab by rememberSaveable { mutableIntStateOf(0) }
-    val tabs = listOf("Tracks", "Statistics", "Settings")
+    val tabs = listOf("Tracks", "Statistics")
+    var menuOpen by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -107,6 +148,23 @@ fun GpxStatsScreen(
                 actions = {
                     IconButton(onClick = onShareDatabase, enabled = !busy && tracks.isNotEmpty()) {
                         Icon(Icons.Filled.Share, contentDescription = "Share database")
+                    }
+                    IconButton(onClick = onOpenSettings) {
+                        Icon(Icons.Filled.Settings, contentDescription = "Settings")
+                    }
+                    Box {
+                        IconButton(onClick = { menuOpen = true }) {
+                            Icon(Icons.Filled.MoreVert, contentDescription = "More")
+                        }
+                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Info about GpxStats") },
+                                onClick = {
+                                    menuOpen = false
+                                    onOpenAbout()
+                                }
+                            )
+                        }
                     }
                 }
             )
@@ -146,15 +204,37 @@ fun GpxStatsScreen(
                     stats = stats,
                     onPeriodGroupingChange = vm::setPeriodGrouping
                 )
-
-                2 -> SettingsTab(
-                    medianWindow = medianWindow,
-                    thresholdMeters = thresholdMeters,
-                    onMedianWindowChange = vm::setElevationMedianWindow,
-                    onThresholdChange = vm::setElevationThresholdMeters,
-                    onReset = vm::resetElevationOptions
-                )
             }
+        }
+    }
+}
+
+@Composable
+private fun SettingsScreen(vm: GpxStatsViewModel, onBack: () -> Unit) {
+    BackHandler(onBack = onBack)
+    val medianWindow by vm.elevationMedianWindow.collectAsStateWithLifecycle()
+    val thresholdMeters by vm.elevationThresholdMeters.collectAsStateWithLifecycle()
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Settings") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                }
+            )
+        }
+    ) { padding ->
+        Box(Modifier.padding(padding)) {
+            SettingsTab(
+                medianWindow = medianWindow,
+                thresholdMeters = thresholdMeters,
+                onMedianWindowChange = vm::setElevationMedianWindow,
+                onThresholdChange = vm::setElevationThresholdMeters,
+                onReset = vm::resetElevationOptions
+            )
         }
     }
 }
@@ -763,6 +843,114 @@ private fun StepperRow(
         )
         IconButton(onClick = onIncrement, enabled = canIncrement) {
             Icon(Icons.Filled.Add, contentDescription = "Increase $label")
+        }
+    }
+}
+
+private const val SOURCE_URL = "https://github.com/HaikuZen/GpxStats"
+
+/** Third-party runtime libraries, shown on the About page. All are Apache-2.0. */
+private val ABOUT_LIBRARIES = listOf(
+    "Jetpack Compose — UI, Material 3, Material Icons",
+    "AndroidX Core · Activity · Lifecycle",
+    "AndroidX Room (SQLite persistence)",
+    "AndroidX DataStore (settings)",
+    "AndroidX DocumentFile (Storage Access Framework)",
+    "Kotlin standard library & Coroutines"
+)
+
+@Composable
+private fun AboutScreen(onBack: () -> Unit) {
+    BackHandler(onBack = onBack)
+    val uriHandler = LocalUriHandler.current
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("About GpxStats") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                }
+            )
+        }
+    ) { padding ->
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item {
+                Text(
+                    "GpxStats",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    "Version ${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+
+            item {
+                Text(
+                    "Imports GPX tracks, stores their metrics in a local database and shows " +
+                        "statistics by activity and by time period. No account, no network, " +
+                        "no tracking.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+
+            item {
+                Card {
+                    Column(
+                        Modifier.fillMaxWidth().padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text("Source code", style = MaterialTheme.typography.titleSmall)
+                        OutlinedButton(onClick = { uriHandler.openUri(SOURCE_URL) }) {
+                            Icon(Icons.AutoMirrored.Filled.OpenInNew, null, Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("github.com/HaikuZen/GpxStats")
+                        }
+                        Text(
+                            "Licensed under the Apache License 2.0.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            }
+
+            item {
+                Card {
+                    Column(
+                        Modifier.fillMaxWidth().padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text("Open-source libraries", style = MaterialTheme.typography.titleSmall)
+                        ABOUT_LIBRARIES.forEach { name ->
+                            Text("• $name", style = MaterialTheme.typography.bodySmall)
+                        }
+                        Text(
+                            "All under the Apache License 2.0.",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+            }
+
+            item {
+                Image(
+                    painter = painterResource(R.drawable.mylogo),
+                    contentDescription = "Born in Napùle 65",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 150.dp)
+                        .padding(top = 8.dp)
+                )
+            }
         }
     }
 }
