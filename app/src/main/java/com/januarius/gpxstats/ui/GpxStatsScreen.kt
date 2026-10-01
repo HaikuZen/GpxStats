@@ -88,6 +88,7 @@ private const val ROUTE_MAIN = 0
 private const val ROUTE_SETTINGS = 1
 private const val ROUTE_ABOUT = 2
 private const val ROUTE_ACTIVITY_DETAIL = 3
+private const val ROUTE_PERIOD_DETAIL = 4
 
 /** Cap on how many "By period" buckets the trend chart draws (most recent, oldest-first). */
 private const val MAX_PERIOD_CHART_BARS = 12
@@ -101,6 +102,7 @@ fun GpxStatsScreen(
 ) {
     var route by rememberSaveable { mutableIntStateOf(ROUTE_MAIN) }
     var selectedActivity by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedPeriod by rememberSaveable { mutableStateOf<String?>(null) }
 
     when (route) {
         ROUTE_SETTINGS -> SettingsScreen(vm = vm, onBack = { route = ROUTE_MAIN })
@@ -109,6 +111,14 @@ fun GpxStatsScreen(
             val activity = selectedActivity
             if (activity != null) {
                 ActivityDetailScreen(vm = vm, activity = activity, onBack = { route = ROUTE_MAIN })
+            } else {
+                route = ROUTE_MAIN
+            }
+        }
+        ROUTE_PERIOD_DETAIL -> {
+            val period = selectedPeriod
+            if (period != null) {
+                PeriodDetailScreen(vm = vm, period = period, onBack = { route = ROUTE_MAIN })
             } else {
                 route = ROUTE_MAIN
             }
@@ -123,6 +133,10 @@ fun GpxStatsScreen(
             onSelectActivity = { name ->
                 selectedActivity = name
                 route = ROUTE_ACTIVITY_DETAIL
+            },
+            onSelectPeriod = { label ->
+                selectedPeriod = label
+                route = ROUTE_PERIOD_DETAIL
             }
         )
     }
@@ -136,7 +150,8 @@ private fun MainScreen(
     onShareDatabase: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenAbout: () -> Unit,
-    onSelectActivity: (String) -> Unit
+    onSelectActivity: (String) -> Unit,
+    onSelectPeriod: (String) -> Unit
 ) {
     val tracks by vm.tracks.collectAsStateWithLifecycle()
     val selected by vm.selected.collectAsStateWithLifecycle()
@@ -222,7 +237,8 @@ private fun MainScreen(
                 1 -> StatsTab(
                     stats = stats,
                     onPeriodGroupingChange = vm::setPeriodGrouping,
-                    onSelectActivity = onSelectActivity
+                    onSelectActivity = onSelectActivity,
+                    onSelectPeriod = onSelectPeriod
                 )
             }
         }
@@ -562,7 +578,8 @@ private fun ActivityPicker(
 private fun StatsTab(
     stats: Stats,
     onPeriodGroupingChange: (PeriodGrouping) -> Unit,
-    onSelectActivity: (String) -> Unit
+    onSelectActivity: (String) -> Unit,
+    onSelectPeriod: (String) -> Unit
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -680,7 +697,8 @@ private fun StatsTab(
                 PeriodCard(
                     grouping = stats.periodGrouping,
                     rows = stats.byPeriod,
-                    onGroupingChange = onPeriodGroupingChange
+                    onGroupingChange = onPeriodGroupingChange,
+                    onSelectPeriod = onSelectPeriod
                 )
             }
         }
@@ -695,7 +713,8 @@ private fun StatsTab(
 private fun PeriodCard(
     grouping: PeriodGrouping,
     rows: List<ActivityStat>,
-    onGroupingChange: (PeriodGrouping) -> Unit
+    onGroupingChange: (PeriodGrouping) -> Unit,
+    onSelectPeriod: (String) -> Unit
 ) {
     Card {
         Column(Modifier.padding(12.dp)) {
@@ -721,6 +740,11 @@ private fun PeriodCard(
                 Spacer(Modifier.height(12.dp))
             }
 
+            Text(
+                "Tap a row for details and an activity breakdown.",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(bottom = 6.dp)
+            )
             StatHeaderRow(firstColumn = grouping.label)
             HorizontalDivider(Modifier.padding(vertical = 4.dp), color = DividerDefaults.color)
             rows.forEach { s ->
@@ -730,7 +754,8 @@ private fun PeriodCard(
                     distance = Format.distance(s.distanceMeters),
                     duration = Format.duration(s.durationSeconds),
                     avgSpeed = Format.speed(s.avgSpeedMps),
-                    ascent = Format.elevation(s.elevationGainMeters)
+                    ascent = Format.elevation(s.elevationGainMeters),
+                    onClick = { onSelectPeriod(s.label) }
                 )
             }
         }
@@ -817,6 +842,122 @@ private fun ActivityDetailScreen(vm: GpxStatsViewModel, activity: String, onBack
                                 color = DividerDefaults.color
                             )
                             periodRows.forEach { s ->
+                                StatValueRow(
+                                    label = s.label,
+                                    count = s.count,
+                                    distance = Format.distance(s.distanceMeters),
+                                    duration = Format.duration(s.durationSeconds),
+                                    avgSpeed = Format.speed(s.avgSpeedMps),
+                                    ascent = Format.elevation(s.elevationGainMeters)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Detail page for one period bucket: its full stat card plus an activity breakdown. */
+@Composable
+private fun PeriodDetailScreen(vm: GpxStatsViewModel, period: String, onBack: () -> Unit) {
+    BackHandler(onBack = onBack)
+    val stats by vm.stats.collectAsStateWithLifecycle()
+    val stat = stats.byPeriod.find { it.label == period }
+    val activityRows = stats.byPeriodActivity[period].orEmpty()
+    val subRows = stats.byPeriodSubPeriod[period].orEmpty()
+    val finerLabel = stats.periodGrouping.finerGroupingLabel()
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(period) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                }
+            )
+        }
+    ) { padding ->
+        if (stat == null) {
+            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                Text(
+                    "No tracks left for \"$period\".",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+            return@Scaffold
+        }
+
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            contentPadding = PaddingValues(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            item { StatDetailCard(title = "${stat.count} track(s)", stat = stat, highlight = true) }
+
+            if (subRows.isNotEmpty()) {
+                item {
+                    Card {
+                        Column(Modifier.padding(12.dp)) {
+                            Text(
+                                "By $finerLabel",
+                                style = MaterialTheme.typography.titleSmall,
+                                modifier = Modifier.padding(bottom = 10.dp)
+                            )
+                            PeriodBarChart(
+                                entries = subRows.map {
+                                    PeriodPoint(it.label, it.distanceMeters, it.elevationGainMeters)
+                                }
+                            )
+                            Spacer(Modifier.height(12.dp))
+
+                            StatHeaderRow(firstColumn = finerLabel.replaceFirstChar { it.uppercase() })
+                            HorizontalDivider(
+                                Modifier.padding(vertical = 4.dp),
+                                color = DividerDefaults.color
+                            )
+                            subRows.forEach { s ->
+                                StatValueRow(
+                                    label = s.label,
+                                    count = s.count,
+                                    distance = Format.distance(s.distanceMeters),
+                                    duration = Format.duration(s.durationSeconds),
+                                    avgSpeed = Format.speed(s.avgSpeedMps),
+                                    ascent = Format.elevation(s.elevationGainMeters)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (activityRows.isNotEmpty()) {
+                item {
+                    Card {
+                        Column(Modifier.padding(12.dp)) {
+                            Text(
+                                "By activity",
+                                style = MaterialTheme.typography.titleSmall,
+                                modifier = Modifier.padding(bottom = 10.dp)
+                            )
+                            ActivityBarChart(
+                                entries = activityRows,
+                                valueOf = { it.distanceMeters },
+                                valueLabel = { Format.distance(it.distanceMeters) },
+                                secondaryOf = { it.elevationGainMeters },
+                                secondaryLabel = "Climb gain"
+                            )
+                            Spacer(Modifier.height(12.dp))
+
+                            StatHeaderRow()
+                            HorizontalDivider(
+                                Modifier.padding(vertical = 4.dp),
+                                color = DividerDefaults.color
+                            )
+                            activityRows.forEach { s ->
                                 StatValueRow(
                                     label = s.label,
                                     count = s.count,

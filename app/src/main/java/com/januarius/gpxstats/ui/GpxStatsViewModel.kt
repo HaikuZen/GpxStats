@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.time.Instant
+import java.time.LocalDate
 import java.time.Month
 import java.time.ZoneId
 import java.time.format.TextStyle
@@ -52,6 +53,13 @@ data class ActivityStat(
 /** How the "By period" breakdown buckets tracks by their start date. */
 enum class PeriodGrouping(val label: String) { WEEK("Week"), MONTH("Month"), YEAR("Year") }
 
+/** Name of the breakdown one level finer than this grouping (used on PeriodDetailScreen). */
+fun PeriodGrouping.finerGroupingLabel(): String = when (this) {
+    PeriodGrouping.WEEK -> "day"
+    PeriodGrouping.MONTH -> "week"
+    PeriodGrouping.YEAR -> "month"
+}
+
 /** Label used for tracks with no start time — sorted last, and excluded from time charts. */
 const val NO_DATE_LABEL = "No date"
 
@@ -63,7 +71,14 @@ data class Stats(
     val periodGrouping: PeriodGrouping = PeriodGrouping.MONTH,
     val byPeriod: List<ActivityStat> = emptyList(),
     /** Same by-period breakdown as [byPeriod], scoped to one activity's own tracks. */
-    val byActivityPeriod: Map<String, List<ActivityStat>> = emptyMap()
+    val byActivityPeriod: Map<String, List<ActivityStat>> = emptyMap(),
+    /** Activity breakdown for one period bucket's own tracks — keyed by [byPeriod] labels. */
+    val byPeriodActivity: Map<String, List<ActivityStat>> = emptyMap(),
+    /**
+     * One level finer than [periodGrouping] (week -> day, month -> ISO week,
+     * year -> month) for one period bucket's own tracks — keyed by [byPeriod] labels.
+     */
+    val byPeriodSubPeriod: Map<String, List<ActivityStat>> = emptyMap()
 )
 
 /** Common activity choices offered in the per-track picker. */
@@ -252,9 +267,7 @@ class GpxStatsViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun computeStats(list: List<Track>, sel: Set<String>, grouping: PeriodGrouping): Stats {
-        val byActivity = list.groupBy { it.activity }
-            .map { (activity, ts) -> aggregate(activity, ts) }
-            .sortedWith(compareByDescending<ActivityStat> { it.count }.thenBy { it.label })
+        val byActivity = computeActivityBreakdown(list)
 
         val total = aggregate("Total", list)
 
@@ -266,6 +279,14 @@ class GpxStatsViewModel(app: Application) : AndroidViewModel(app) {
             stat.label to computePeriodSeries(list.filter { it.activity == stat.label }, grouping)
         }
 
+        val periodGroups = list.groupBy { periodKey(it.startTimeMillis, grouping) }
+        val byPeriodActivity = periodGroups.entries.associate { (key, ts) ->
+            periodLabel(key, grouping) to computeActivityBreakdown(ts)
+        }
+        val byPeriodSubPeriod = periodGroups.entries.associate { (key, ts) ->
+            periodLabel(key, grouping) to computeSubPeriodSeries(ts, grouping)
+        }
+
         return Stats(
             totalCount = list.size,
             byActivity = byActivity,
@@ -273,9 +294,17 @@ class GpxStatsViewModel(app: Application) : AndroidViewModel(app) {
             selection = selection,
             periodGrouping = grouping,
             byPeriod = byPeriod,
-            byActivityPeriod = byActivityPeriod
+            byActivityPeriod = byActivityPeriod,
+            byPeriodActivity = byPeriodActivity,
+            byPeriodSubPeriod = byPeriodSubPeriod
         )
     }
+
+    /** Activity breakdown for an arbitrary subset of tracks (all of them, or one period's). */
+    private fun computeActivityBreakdown(ts: List<Track>): List<ActivityStat> =
+        ts.groupBy { it.activity }
+            .map { (activity, group) -> aggregate(activity, group) }
+            .sortedWith(compareByDescending<ActivityStat> { it.count }.thenBy { it.label })
 
     /** By-period breakdown for an arbitrary subset of tracks (all of them, or one activity's). */
     private fun computePeriodSeries(ts: List<Track>, grouping: PeriodGrouping): List<ActivityStat> =
@@ -286,6 +315,48 @@ class GpxStatsViewModel(app: Application) : AndroidViewModel(app) {
                 val undated = entries.filter { it.first == NO_DATE_KEY }
                 (dated + undated).map { it.second }
             }
+
+    /**
+     * One level finer than [grouping], for one period bucket's own tracks: a week's
+     * tracks broken down by day, a month's by ISO week, a year's by month. Tracks with
+     * no start time can't be placed on this finer timeline and are skipped (they're
+     * still counted in the period's own totals via [aggregate]).
+     */
+    private fun computeSubPeriodSeries(ts: List<Track>, grouping: PeriodGrouping): List<ActivityStat> {
+        val dated = ts.mapNotNull { t -> t.startTimeMillis?.let { t to it } }
+        if (dated.isEmpty()) return emptyList()
+        return when (grouping) {
+            PeriodGrouping.WEEK -> dated.groupBy { (_, millis) -> dayKey(millis) }
+                .toSortedMap()
+                .map { (key, group) -> aggregate(dayLabel(key), group.map { it.first }) }
+
+            PeriodGrouping.MONTH -> dated.groupBy { (_, millis) -> periodKey(millis, PeriodGrouping.WEEK) }
+                .toSortedMap()
+                .map { (key, group) -> aggregate(isoWeekLabel(key), group.map { it.first }) }
+
+            PeriodGrouping.YEAR -> dated.groupBy { (_, millis) -> monthKey(millis) }
+                .toSortedMap()
+                .map { (key, group) -> aggregate(monthOnlyLabel(key), group.map { it.first }) }
+        }
+    }
+
+    private fun dayKey(millis: Long): String =
+        Instant.ofEpochMilli(millis).atZone(ZoneId.systemDefault()).toLocalDate().toString()
+
+    private fun dayLabel(key: String): String {
+        val date = LocalDate.parse(key)
+        val dayName = date.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale.getDefault())
+        return "$dayName ${date.dayOfMonth}"
+    }
+
+    /** `key` is a WEEK [periodKey] like `2026-W39`; shown without the (redundant here) year. */
+    private fun isoWeekLabel(key: String): String = "W" + key.substringAfter("-W")
+
+    private fun monthKey(millis: Long): String =
+        "%02d".format(Instant.ofEpochMilli(millis).atZone(ZoneId.systemDefault()).monthValue)
+
+    private fun monthOnlyLabel(key: String): String =
+        Month.of(key.toInt()).getDisplayName(TextStyle.SHORT, Locale.getDefault())
 
     private fun aggregate(label: String, ts: List<Track>) = ActivityStat(
         label = label,

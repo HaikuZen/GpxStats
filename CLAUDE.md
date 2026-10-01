@@ -100,14 +100,27 @@ ui/
                            checked tracks. byActivityPeriod is the same by-period
                            breakdown computed again per activity (computePeriodSeries()
                            factored out so byPeriod and byActivityPeriod share it) — it
-                           feeds ActivityDetailScreen's chart/table.
+                           feeds ActivityDetailScreen's chart/table. byPeriodActivity is
+                           the mirror image: an activity breakdown per period bucket
+                           (computeActivityBreakdown() factored out so byActivity and
+                           byPeriodActivity share it) — it feeds PeriodDetailScreen's
+                           activity chart/table. byPeriodSubPeriod is a THIRD breakdown
+                           per period bucket, one level finer than periodGrouping itself
+                           (computeSubPeriodSeries(): WEEK -> by day, MONTH -> by ISO
+                           week, YEAR -> by month; tracks with no start time are skipped,
+                           there's no "finer" bucket for them) — it feeds
+                           PeriodDetailScreen's "By day/week/month" chart/table.
+                           periodGroups (the shared `list.groupBy { periodKey(...) }`) is
+                           computed once and reused for both byPeriodActivity and
+                           byPeriodSubPeriod.
                            importFile / runSync read settings.elevationOptions() and pass
                            it to the repo; runSync feeds the repo's progress callback into
                            _syncProgress. shareDatabase() -> repo.exportDatabase(), result
                            in shareDbUri.
   GpxStatsScreen           GpxStatsScreen() is a router over a `route` Int state (plus
-                           `selectedActivity: String?` alongside it): MainScreen
-                           (default), SettingsScreen, AboutScreen, ActivityDetailScreen.
+                           `selectedActivity: String?` / `selectedPeriod: String?`
+                           alongside it): MainScreen (default), SettingsScreen,
+                           AboutScreen, ActivityDetailScreen, PeriodDetailScreen.
                            MainScreen — two tabs "Tracks" / "Statistics"; top bar has
                            Share, a gear icon (-> SettingsScreen) and a ⋮ overflow with
                            "Info about GpxStats" (-> AboutScreen). SyncStatusBar under the
@@ -124,15 +137,25 @@ ui/
                            own Week/Month/Year chip row + PeriodBarChart + table, built
                            from stats.byActivityPeriod[activity] via the shared
                            periodChartEntries() helper (also used by PeriodCard).
-                           SettingsScreen/AboutScreen/ActivityDetailScreen all take a
-                           BackHandler.
+                           PeriodDetailScreen — back arrow; opened by tapping a row in the
+                           "By period" table (same StatValueRow.onClick mechanism); shows
+                           that period's StatDetailCard, then a "By day/week/month" card
+                           (PeriodBarChart + table, label from PeriodGrouping.
+                           finerGroupingLabel(), rows from stats.byPeriodSubPeriod), then
+                           an "By activity" card (ActivityBarChart + table, rows from
+                           stats.byPeriodActivity[periodLabel]). No grouping switcher here
+                           (changing week/month/year would mean picking a different
+                           bucket, not re-slicing this one) — unlike ActivityDetailScreen.
+                           SettingsScreen/AboutScreen/ActivityDetailScreen/
+                           PeriodDetailScreen all take a BackHandler.
                            Stat compact tables show label / # / distance / duration /
                            avg speed / ascent; detail cards add moving / descent / max
                            speed / max altitude. Two charts (Charts.kt, see below) sit
                            above their tables: ActivityBarChart ("Distance by activity",
-                           with a climb-gain line overlay) and PeriodBarChart (in
-                           PeriodCard and ActivityDetailScreen, distance bars + a
-                           climb-gain line, trend over the most recent
+                           with a climb-gain line overlay — also reused inside
+                           PeriodDetailScreen for that period's activity breakdown) and
+                           PeriodBarChart (in PeriodCard and ActivityDetailScreen,
+                           distance bars + a climb-gain line, trend over the most recent
                            MAX_PERIOD_CHART_BARS periods).
   Charts                   ActivityBarChart (horizontal bars, one per ActivityStat, plus
                            an optional secondaryOf line connecting a per-row marker — used
@@ -271,11 +294,24 @@ Sharing: `shareDatabase()` → `_shareDbUri` → `MainActivity` `LaunchedEffect`
   analytically from fixed Dp row/column sizes (see `ActivityBarChart`'s `secondaryOf` /
   `PeriodBarChart`'s line) — never from measured child layout, which can drift out of
   sync with what's drawn.
-- **New drill-down / detail page**: follow the `ActivityDetailScreen` pattern — a new
-  `ROUTE_*` int constant, a piece of `rememberSaveable` state next to `route` in
-  `GpxStatsScreen()` if the target needs an argument (see `selectedActivity`), a
-  `BackHandler`, and reuse of existing pieces (`StatDetailCard`, `PeriodBarChart`,
-  `periodChartEntries()`) rather than re-deriving stats already in `Stats`.
+- **New drill-down / detail page**: follow the `ActivityDetailScreen` /
+  `PeriodDetailScreen` pattern — a new `ROUTE_*` int constant, a piece of
+  `rememberSaveable` state next to `route` in `GpxStatsScreen()` if the target needs an
+  argument (see `selectedActivity` / `selectedPeriod`), a `BackHandler`, a clickable row
+  somewhere passing that argument up (`StatValueRow.onClick`), and reuse of existing
+  pieces (`StatDetailCard`, `ActivityBarChart`, `PeriodBarChart`, `periodChartEntries()`)
+  rather than re-deriving stats already in `Stats`. If the drill-down needs a breakdown
+  "the other way" (e.g. activities within one period, mirroring periods within one
+  activity), compute it in `GpxStatsViewModel.computeStats()` as a
+  `Map<String, List<ActivityStat>>` keyed by the row label it belongs under (see
+  `byActivityPeriod` / `byPeriodActivity`), sharing the single-group aggregator
+  (`computeActivityBreakdown` / `computePeriodSeries`) with the top-level list it
+  mirrors. For a breakdown at a different *granularity* than an existing one (not a
+  different dimension), follow `computeSubPeriodSeries` instead: pick the finer
+  grouping explicitly per case (don't add it to the `PeriodGrouping` enum unless it
+  should also appear as a top-level chip, since `PeriodGrouping.entries` drives those
+  chip rows directly) and skip tracks that have no way to be placed in it rather than
+  inventing a sentinel bucket for them.
 - **New user setting**: add a key + `Flow` + setter (coerced) in `SettingsStore` (and a
   field in `elevationOptions()`-style one-shot reads if it affects parsing/sync); expose
   a `StateFlow` + setter on `GpxStatsViewModel`; render it in `SettingsTab`. Use

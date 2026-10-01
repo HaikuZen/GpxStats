@@ -97,6 +97,9 @@ Worked example: `300 m → 500 m → 400 m → 700 m` with a 10 m threshold →
   **elevation gain**) as a table, bucketed by **week**, **month** or **year**
   (switchable with a chip row). Tracks without a start time fall into a *No date* row
   and are excluded from the trend chart (there is nowhere to place them on a timeline).
+  **Tap a row** to open that period's own detail page: its full stats, a finer-grained
+  chart + table (a **week** broken down **by day**, a **month** by **week**, a **year**
+  by **month**), and a breakdown of the activities done in it (chart and table).
 - **Detail cards** per activity — the full set: count, distance, duration, moving time,
   ascent, descent, average speed, max speed, max altitude.
 - **Selected** — check any tracks on the Tracks tab and a Selected aggregate (same full
@@ -176,8 +179,9 @@ app/src/main/java/com/januarius/gpxstats/
     SettingsStore.kt        DataStore: sync folder uri, default activity, elevation options
   ui/
     GpxStatsViewModel.kt    StateFlows + statistics aggregation (by activity + by period)
-    GpxStatsScreen.kt       Tracks / Statistics tabs + Settings, About & Activity-detail
-                           sub-screens (tap a "By activity" row to open the last one)
+    GpxStatsScreen.kt       Tracks / Statistics tabs + Settings, About, Activity-detail
+                           and Period-detail sub-screens (tap a row in either Statistics
+                           table to open its detail page)
     Charts.kt               Small hand-rolled bar+line charts used on the Statistics tab
     Theme.kt, Format.kt     Material 3 theme, display formatters
 
