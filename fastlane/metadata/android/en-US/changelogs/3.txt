@@ -1,0 +1,7 @@
+- Statistics charts: distance bars with a climb-gain line overlay, for both the
+  by-activity and by-period views.
+- Tap a row in "By activity" or "By period" to open a detail page: full stats plus a
+  trend chart (by day/week/month for a period, or over time for an activity) and an
+  activity breakdown.
+- Fixed a bug where stray GPX waypoints (e.g. OpenTracks "indicator" markers) could
+  silently inflate a track's distance and shorten its recorded duration.
