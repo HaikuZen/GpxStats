@@ -21,6 +21,9 @@ data class ElevationOptions(
     val thresholdMeters: Double = GpxParser.DEFAULT_ELEVATION_THRESHOLD_M
 )
 
+/** One raw sample from the GPX: a `<trkpt>`, `<rtept>`, or standalone `<wpt>`. */
+internal data class GpxPoint(val lat: Double, val lon: Double, val ele: Double?, val time: Long?)
+
 /** Aggregated metrics computed from a GPX file. */
 data class GpxSummary(
     val distanceMeters: Double,
@@ -39,11 +42,15 @@ data class GpxSummary(
 )
 
 /**
- * Streaming GPX reader. Walks `<trkpt>` / `<rtept>` / `<wpt>` points and accumulates
- * distance (haversine), elapsed and moving time, max speed and max altitude. Elevation
- * gain / loss are computed after the walk from the collected `<ele>` series: an
- * n-point median filter to drop spikes, then a hysteresis pass that only commits a
- * climb or descent once the profile reverses by more than a threshold.
+ * Streaming GPX reader. Walks `<trkpt>` / `<rtept>` points and accumulates distance
+ * (haversine), elapsed and moving time, max speed and max altitude. Standalone `<wpt>`
+ * elements (point-of-interest markers some apps — e.g. OpenTracks "indicators" — sprinkle
+ * into the file, unrelated in time and space to the recorded path) are collected
+ * separately and only used as a fallback for files that have no real track at all; see
+ * [GpxPoint] and [selectPoints]. Elevation gain / loss are computed after the walk from
+ * the collected `<ele>` series: an n-point median filter to drop spikes, then a
+ * hysteresis pass that only commits a climb or descent once the profile reverses by more
+ * than a threshold.
  */
 object GpxParser {
 
@@ -84,19 +91,10 @@ object GpxParser {
         var curLon: Double? = null
         var curEle: Double? = null
         var curTime: Long? = null
+        var curTag: String? = null
 
-        var prevLat: Double? = null
-        var prevLon: Double? = null
-        var prevTime: Long? = null
-
-        var totalDistance = 0.0
-        var movingSeconds = 0L
-        var maxSpeed = 0.0
-        var maxEle: Double? = null
-        var startTime: Long? = null
-        var endTime: Long? = null
-        var pointCount = 0
-        val elevations = ArrayList<Double>()
+        val trackPoints = ArrayList<GpxPoint>()
+        val waypoints = ArrayList<GpxPoint>()
 
         var inPoint = false
         val text = StringBuilder()
@@ -108,6 +106,7 @@ object GpxParser {
                     when (parser.name.lowercase()) {
                         "trkpt", "rtept", "wpt" -> {
                             inPoint = true
+                            curTag = parser.name.lowercase()
                             curLat = parser.getAttributeValue(null, "lat")?.toDoubleOrNull()
                             curLon = parser.getAttributeValue(null, "lon")?.toDoubleOrNull()
                             curEle = null
@@ -127,53 +126,87 @@ object GpxParser {
                             val lat = curLat
                             val lon = curLon
                             if (lat != null && lon != null) {
-                                pointCount++
-
-                                val pLat = prevLat
-                                val pLon = prevLon
-                                if (pLat != null && pLon != null) {
-                                    val d = haversine(pLat, pLon, lat, lon)
-                                    totalDistance += d
-
-                                    val pt = prevTime
-                                    val ct = curTime
-                                    if (pt != null && ct != null && ct > pt) {
-                                        val dtSec = (ct - pt) / 1000.0
-                                        if (dtSec > 0) {
-                                            val speed = d / dtSec
-                                            if (speed >= MOVING_SPEED_THRESHOLD_MPS) {
-                                                movingSeconds += dtSec.toLong()
-                                            }
-                                            if (speed <= MAX_PLAUSIBLE_SPEED_MPS) {
-                                                maxSpeed = max(maxSpeed, speed)
-                                            }
-                                        }
-                                    }
-                                }
-
-                                val cEle = curEle
-                                if (cEle != null) {
-                                    elevations.add(cEle)
-                                    val prevMax = maxEle
-                                    maxEle = if (prevMax == null) cEle else max(prevMax, cEle)
-                                }
-
-                                curTime?.let {
-                                    if (startTime == null) startTime = it
-                                    endTime = it
-                                }
-
-                                prevLat = lat
-                                prevLon = lon
-                                if (curTime != null) prevTime = curTime
+                                val point = GpxPoint(lat, lon, curEle, curTime)
+                                if (curTag == "wpt") waypoints.add(point) else trackPoints.add(point)
                             }
                             inPoint = false
+                            curTag = null
                         }
                     }
                     text.setLength(0)
                 }
             }
             event = parser.next()
+        }
+
+        return summarize(selectPoints(trackPoints, waypoints), medianWindow, elevationThresholdMeters)
+    }
+
+    /**
+     * `<trkpt>`/`<rtept>` are the real path and always win when present. Standalone
+     * `<wpt>` markers are only used as a last resort, for the rare file that is nothing
+     * but a list of waypoints (no `<trk>`/`<rte>` at all) — never mixed in alongside a
+     * real track, since they can land anywhere in time and space relative to it.
+     */
+    internal fun selectPoints(trackPoints: List<GpxPoint>, waypoints: List<GpxPoint>): List<GpxPoint> =
+        trackPoints.ifEmpty { waypoints }
+
+    /** Turns an ordered point sequence into a [GpxSummary]: distance, time, speed, elevation. */
+    internal fun summarize(
+        points: List<GpxPoint>,
+        medianWindow: Int,
+        elevationThresholdMeters: Double
+    ): GpxSummary {
+        var totalDistance = 0.0
+        var movingSeconds = 0L
+        var maxSpeed = 0.0
+        var maxEle: Double? = null
+        var startTime: Long? = null
+        var endTime: Long? = null
+        val elevations = ArrayList<Double>()
+
+        var prevLat: Double? = null
+        var prevLon: Double? = null
+        var prevTime: Long? = null
+
+        for (point in points) {
+            val pLat = prevLat
+            val pLon = prevLon
+            if (pLat != null && pLon != null) {
+                val d = haversine(pLat, pLon, point.lat, point.lon)
+                totalDistance += d
+
+                val pt = prevTime
+                val ct = point.time
+                if (pt != null && ct != null && ct > pt) {
+                    val dtSec = (ct - pt) / 1000.0
+                    if (dtSec > 0) {
+                        val speed = d / dtSec
+                        if (speed >= MOVING_SPEED_THRESHOLD_MPS) {
+                            movingSeconds += dtSec.toLong()
+                        }
+                        if (speed <= MAX_PLAUSIBLE_SPEED_MPS) {
+                            maxSpeed = max(maxSpeed, speed)
+                        }
+                    }
+                }
+            }
+
+            val cEle = point.ele
+            if (cEle != null) {
+                elevations.add(cEle)
+                val prevMax = maxEle
+                maxEle = if (prevMax == null) cEle else max(prevMax, cEle)
+            }
+
+            point.time?.let {
+                if (startTime == null) startTime = it
+                endTime = it
+            }
+
+            prevLat = point.lat
+            prevLon = point.lon
+            if (point.time != null) prevTime = point.time
         }
 
         val begin = startTime
@@ -192,7 +225,7 @@ object GpxParser {
             maxSpeedMps = maxSpeed,
             maxElevationMeters = maxEle,
             startTimeMillis = begin,
-            pointCount = pointCount
+            pointCount = points.size
         )
     }
 

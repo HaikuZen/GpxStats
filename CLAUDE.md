@@ -60,13 +60,17 @@ data/
 
 gpx/GpxParser              Stateless object. parse(input, medianWindow, threshold) or
                            parse(input, ElevationOptions) -> GpxSummary using
-                           android.util.Xml (XmlPullParser). Haversine distance, elapsed +
-                           moving time, fastest plausible segment speed (<= 55 m/s),
-                           highest <ele>. Elevation gain / loss come from
-                           elevationGainLoss(): an n-point median filter
-                           (DEFAULT_ELEVATION_MEDIAN_WINDOW = 5) then a hysteresis walk
-                           that only commits a climb/descent past a threshold
-                           (DEFAULT_ELEVATION_THRESHOLD_M = 10 m).
+                           android.util.Xml (XmlPullParser). The XML walk only collects
+                           raw GpxPoint(lat, lon, ele, time) into two lists — trackPoints
+                           (<trkpt>/<rtept>) and waypoints (standalone <wpt>) — then
+                           selectPoints() picks trackPoints, falling back to waypoints
+                           only when there is no real track at all, and summarize() turns
+                           the chosen list into distance (haversine), elapsed + moving
+                           time, fastest plausible segment speed (<= 55 m/s), and highest
+                           <ele>. Elevation gain / loss come from elevationGainLoss(): an
+                           n-point median filter (DEFAULT_ELEVATION_MEDIAN_WINDOW = 5)
+                           then a hysteresis walk that only commits a climb/descent past a
+                           threshold (DEFAULT_ELEVATION_THRESHOLD_M = 10 m).
         ElevationOptions   {medianWindow, thresholdMeters} bundle for the above.
 
 repo/
@@ -93,13 +97,17 @@ ui/
                            summed), plus max speed and max altitude (max / max-of-nullable,
                            NOT summed) and ActivityStat.avgSpeedMps (derived: distance /
                            moving, else elapsed); also a "Selected" aggregate over the
-                           checked tracks.
+                           checked tracks. byActivityPeriod is the same by-period
+                           breakdown computed again per activity (computePeriodSeries()
+                           factored out so byPeriod and byActivityPeriod share it) — it
+                           feeds ActivityDetailScreen's chart/table.
                            importFile / runSync read settings.elevationOptions() and pass
                            it to the repo; runSync feeds the repo's progress callback into
                            _syncProgress. shareDatabase() -> repo.exportDatabase(), result
                            in shareDbUri.
-  GpxStatsScreen           GpxStatsScreen() is a router over a `route` Int state:
-                           MainScreen (default), SettingsScreen, AboutScreen.
+  GpxStatsScreen           GpxStatsScreen() is a router over a `route` Int state (plus
+                           `selectedActivity: String?` alongside it): MainScreen
+                           (default), SettingsScreen, AboutScreen, ActivityDetailScreen.
                            MainScreen — two tabs "Tracks" / "Statistics"; top bar has
                            Share, a gear icon (-> SettingsScreen) and a ⋮ overflow with
                            "Info about GpxStats" (-> AboutScreen). SyncStatusBar under the
@@ -110,10 +118,36 @@ ui/
                            AboutScreen — back arrow; BuildConfig.VERSION_NAME/CODE, a
                            LocalUriHandler link to SOURCE_URL, the ABOUT_LIBRARIES list,
                            and res/drawable-nodpi/mylogo.jpg at the bottom.
-                           SettingsScreen/AboutScreen both take a BackHandler.
+                           ActivityDetailScreen — back arrow; opened by tapping a row in
+                           the "By activity" table (StatValueRow.onClick, Total row stays
+                           non-clickable); shows that activity's StatDetailCard plus its
+                           own Week/Month/Year chip row + PeriodBarChart + table, built
+                           from stats.byActivityPeriod[activity] via the shared
+                           periodChartEntries() helper (also used by PeriodCard).
+                           SettingsScreen/AboutScreen/ActivityDetailScreen all take a
+                           BackHandler.
                            Stat compact tables show label / # / distance / duration /
                            avg speed / ascent; detail cards add moving / descent / max
-                           speed / max altitude.
+                           speed / max altitude. Two charts (Charts.kt, see below) sit
+                           above their tables: ActivityBarChart ("Distance by activity",
+                           with a climb-gain line overlay) and PeriodBarChart (in
+                           PeriodCard and ActivityDetailScreen, distance bars + a
+                           climb-gain line, trend over the most recent
+                           MAX_PERIOD_CHART_BARS periods).
+  Charts                   ActivityBarChart (horizontal bars, one per ActivityStat, plus
+                           an optional secondaryOf line connecting a per-row marker — used
+                           for climb gain against distance bars) and PeriodBarChart
+                           (vertical distance bars + a climb-gain line over a chronological
+                           List<PeriodPoint>) — plain Box+background bars and a Canvas
+                           line, no charting library. Bar and line each scale to their OWN
+                           max (their magnitudes aren't comparable) via BoxWithConstraints
+                           + analytic column-center math, not measured child positions —
+                           row/column sizes are fixed Dp constants so the math and the
+                           actual layout can't drift apart. activityColor(label) hashes
+                           the label into a fixed 8-color palette so the same activity
+                           name is always the same color; bars/lines never carry the only
+                           copy of a number — the table below each chart has the exact
+                           values.
   Theme / Format           Material 3 theme (dynamic color on S+), display formatters.
 ```
 
@@ -143,8 +177,18 @@ Sharing: `shareDatabase()` → `_shareDbUri` → `MainActivity` `LaunchedEffect`
   `VERSION_CODE`. `SOURCE_URL` (the GitHub repo) and `ABOUT_LIBRARIES` live in
   `GpxStatsScreen.kt` — update them if the repo moves or deps change.
 - `GpxParser.parse()` depends on `android.util.Xml`, so it needs an instrumented test or
-  Robolectric. But `elevationGainLoss()` is `internal` and pure (no Android types) — it
-  is the right place for plain JVM unit tests of the smoothing / hysteresis maths.
+  Robolectric. But `elevationGainLoss()`, `selectPoints()` and `summarize()` are
+  `internal` and pure (no Android types, no XML) — they're the right place for plain JVM
+  unit tests, and are where almost all of the actual math lives; `parse()` itself is just
+  the XML walk that fills two `GpxPoint` lists and hands off to them.
+- **Standalone `<wpt>` elements are never mixed into a track's distance/time/elevation.**
+  Some apps (OpenTracks "indicators" among them) sprinkle waypoints into the file that
+  are unrelated in time and place to the recorded path; folding them into the same point
+  stream as `<trkpt>`/`<rtept>` silently corrupts distance (bogus teleport segments) and
+  start time (picks up a waypoint's timestamp instead of the first real point's) — this
+  was a real, hard-to-notice bug. `<wpt>`s are only ever used as a fallback, for a file
+  that is nothing but a list of waypoints with no `<trk>`/`<rte>` at all
+  (`GpxParser.selectPoints`). See `GpxParserPointsTest` for the regression coverage.
 - The shared database is a plain copy of `gpxstats.db` — no encryption, no redaction.
   It is written to `cacheDir/shared/` (wiped and rewritten on each share) and only ever
   leaves the app through the user-driven `ACTION_SEND` chooser. Keep it that way; do not
@@ -195,6 +239,11 @@ Sharing: `shareDatabase()` → `_shareDbUri` → `MainActivity` `LaunchedEffect`
 - GPX files without `<time>` elements import fine but have `durationSeconds == 0` and
   `startTimeMillis == null` (they sort last).
 - `samples/ride-sample.gpx` is a small fixture for manual import testing.
+- Tracks imported before the `<wpt>`-exclusion fix above may have corrupted distance /
+  duration / start time stored in the DB (from stray waypoints getting mixed into the
+  track). There's no migration for this — it self-heals on the next import / sync of the
+  same file, since `TrackRepository.importOne`'s update branch always overwrites the
+  computed fields.
 
 ## Common changes
 
@@ -212,6 +261,21 @@ Sharing: `shareDatabase()` → `_shareDbUri` → `MainActivity` `LaunchedEffect`
   automatically (`PeriodGrouping.entries`).
 - **Expose more of the cache dir to sharing**: add a `<paths>` entry to
   `res/xml/file_paths.xml`; the authority is already wired.
+- **New chart / chart metric**: reuse `ActivityBarChart` (with a different
+  `valueOf`/`valueLabel`, e.g. duration instead of distance) or `PeriodBarChart` (build
+  a different `List<PeriodPoint>`) in `Charts.kt` rather than adding a new composable.
+  A genuinely new chart shape goes in `Charts.kt` too; keep the "bars/lines, not the
+  only source of a number" rule (pair every chart with the table that already has exact
+  values), keep `activityColor()` as the one place activity colors are decided, and if
+  it overlays two series, scale each to its own max and compute point positions
+  analytically from fixed Dp row/column sizes (see `ActivityBarChart`'s `secondaryOf` /
+  `PeriodBarChart`'s line) — never from measured child layout, which can drift out of
+  sync with what's drawn.
+- **New drill-down / detail page**: follow the `ActivityDetailScreen` pattern — a new
+  `ROUTE_*` int constant, a piece of `rememberSaveable` state next to `route` in
+  `GpxStatsScreen()` if the target needs an argument (see `selectedActivity`), a
+  `BackHandler`, and reuse of existing pieces (`StatDetailCard`, `PeriodBarChart`,
+  `periodChartEntries()`) rather than re-deriving stats already in `Stats`.
 - **New user setting**: add a key + `Flow` + setter (coerced) in `SettingsStore` (and a
   field in `elevationOptions()`-style one-shot reads if it affects parsing/sync); expose
   a `StateFlow` + setter on `GpxStatsViewModel`; render it in `SettingsTab`. Use

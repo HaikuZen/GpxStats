@@ -52,13 +52,18 @@ data class ActivityStat(
 /** How the "By period" breakdown buckets tracks by their start date. */
 enum class PeriodGrouping(val label: String) { WEEK("Week"), MONTH("Month"), YEAR("Year") }
 
+/** Label used for tracks with no start time — sorted last, and excluded from time charts. */
+const val NO_DATE_LABEL = "No date"
+
 data class Stats(
     val totalCount: Int = 0,
     val byActivity: List<ActivityStat> = emptyList(),
     val total: ActivityStat = ActivityStat("Total", 0, 0.0, 0L, 0L, 0.0),
     val selection: ActivityStat? = null,
     val periodGrouping: PeriodGrouping = PeriodGrouping.MONTH,
-    val byPeriod: List<ActivityStat> = emptyList()
+    val byPeriod: List<ActivityStat> = emptyList(),
+    /** Same by-period breakdown as [byPeriod], scoped to one activity's own tracks. */
+    val byActivityPeriod: Map<String, List<ActivityStat>> = emptyMap()
 )
 
 /** Common activity choices offered in the per-track picker. */
@@ -256,13 +261,10 @@ class GpxStatsViewModel(app: Application) : AndroidViewModel(app) {
         val selectedTracks = list.filter { it.name in sel }
         val selection = if (selectedTracks.isEmpty()) null else aggregate("Selected", selectedTracks)
 
-        val byPeriod = list.groupBy { periodKey(it.startTimeMillis, grouping) }
-            .map { (key, ts) -> key to aggregate(periodLabel(key, grouping), ts) }
-            .let { entries ->
-                val dated = entries.filter { it.first != NO_DATE_KEY }.sortedByDescending { it.first }
-                val undated = entries.filter { it.first == NO_DATE_KEY }
-                (dated + undated).map { it.second }
-            }
+        val byPeriod = computePeriodSeries(list, grouping)
+        val byActivityPeriod = byActivity.associate { stat ->
+            stat.label to computePeriodSeries(list.filter { it.activity == stat.label }, grouping)
+        }
 
         return Stats(
             totalCount = list.size,
@@ -270,9 +272,20 @@ class GpxStatsViewModel(app: Application) : AndroidViewModel(app) {
             total = total,
             selection = selection,
             periodGrouping = grouping,
-            byPeriod = byPeriod
+            byPeriod = byPeriod,
+            byActivityPeriod = byActivityPeriod
         )
     }
+
+    /** By-period breakdown for an arbitrary subset of tracks (all of them, or one activity's). */
+    private fun computePeriodSeries(ts: List<Track>, grouping: PeriodGrouping): List<ActivityStat> =
+        ts.groupBy { periodKey(it.startTimeMillis, grouping) }
+            .map { (key, group) -> key to aggregate(periodLabel(key, grouping), group) }
+            .let { entries ->
+                val dated = entries.filter { it.first != NO_DATE_KEY }.sortedByDescending { it.first }
+                val undated = entries.filter { it.first == NO_DATE_KEY }
+                (dated + undated).map { it.second }
+            }
 
     private fun aggregate(label: String, ts: List<Track>) = ActivityStat(
         label = label,
@@ -301,7 +314,7 @@ class GpxStatsViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun periodLabel(key: String, grouping: PeriodGrouping): String {
-        if (key == NO_DATE_KEY) return "No date"
+        if (key == NO_DATE_KEY) return NO_DATE_LABEL
         return when (grouping) {
             PeriodGrouping.YEAR -> key
             PeriodGrouping.MONTH -> {

@@ -38,6 +38,12 @@ Files without `<time>` elements still import (distance and elevation only; durat
 moving time and max speed are `0`). Files without `<ele>` show `–` for altitude and `0`
 for gain / loss.
 
+Only `<trkpt>` / `<rtept>` (the actual recorded path) count toward these numbers.
+Standalone `<wpt>` markers — point-of-interest pins some apps (e.g. OpenTracks
+"indicators") add alongside a track — are ignored whenever a real track is present, since
+they can be timestamped and located well away from the ride; they're only used as a
+fallback for a file that is nothing but a list of waypoints.
+
 #### Elevation gain / loss algorithm
 
 Raw GPS/barometric elevation jitters by several metres per sample, so summing every
@@ -80,11 +86,17 @@ Worked example: `300 m → 500 m → 400 m → 700 m` with a 10 m threshold →
 
 - **Summary** — total number of tracks, total distance and duration, total ascent /
   descent, plus average speed, max speed and peak altitude across everything.
-- **Per activity type** — count, distance, duration, average speed and ascent, with a
-  **Total** row.
-- **By period** — the same columns (including **elevation gain**) bucketed by **week**,
-  **month** or **year** (switchable with a chip row). Tracks without a start time fall
-  into a *No date* row.
+- **Per activity type** — a horizontal bar chart of distance by activity with a
+  climb-gain line overlaid on it, then count, distance, duration, average speed and
+  ascent as a table, with a **Total** row. **Tap a row** to open that activity's own
+  detail page: its full stats plus a by-period trend chart and table just for that
+  activity.
+- **By period** — a bar chart of the trend over the most recent periods (oldest to
+  newest, capped so it stays readable) — distance as bars, elevation gain as an
+  overlaid line, each scaled to its own range — then the same columns (including
+  **elevation gain**) as a table, bucketed by **week**, **month** or **year**
+  (switchable with a chip row). Tracks without a start time fall into a *No date* row
+  and are excluded from the trend chart (there is nowhere to place them on a timeline).
 - **Detail cards** per activity — the full set: count, distance, duration, moving time,
   ascent, descent, average speed, max speed, max altitude.
 - **Selected** — check any tracks on the Tracks tab and a Selected aggregate (same full
@@ -164,7 +176,9 @@ app/src/main/java/com/januarius/gpxstats/
     SettingsStore.kt        DataStore: sync folder uri, default activity, elevation options
   ui/
     GpxStatsViewModel.kt    StateFlows + statistics aggregation (by activity + by period)
-    GpxStatsScreen.kt       Tracks / Statistics tabs + Settings & About sub-screens
+    GpxStatsScreen.kt       Tracks / Statistics tabs + Settings, About & Activity-detail
+                           sub-screens (tap a "By activity" row to open the last one)
+    Charts.kt               Small hand-rolled bar+line charts used on the Statistics tab
     Theme.kt, Format.kt     Material 3 theme, display formatters
 
 app/src/main/res/drawable-nodpi/mylogo.jpg   logo shown on the About page

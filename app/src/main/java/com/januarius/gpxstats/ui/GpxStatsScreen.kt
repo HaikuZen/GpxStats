@@ -4,6 +4,7 @@ package com.januarius.gpxstats.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -86,6 +87,10 @@ import kotlin.math.roundToInt
 private const val ROUTE_MAIN = 0
 private const val ROUTE_SETTINGS = 1
 private const val ROUTE_ABOUT = 2
+private const val ROUTE_ACTIVITY_DETAIL = 3
+
+/** Cap on how many "By period" buckets the trend chart draws (most recent, oldest-first). */
+private const val MAX_PERIOD_CHART_BARS = 12
 
 @Composable
 fun GpxStatsScreen(
@@ -95,17 +100,30 @@ fun GpxStatsScreen(
     onShareDatabase: () -> Unit
 ) {
     var route by rememberSaveable { mutableIntStateOf(ROUTE_MAIN) }
+    var selectedActivity by rememberSaveable { mutableStateOf<String?>(null) }
 
     when (route) {
         ROUTE_SETTINGS -> SettingsScreen(vm = vm, onBack = { route = ROUTE_MAIN })
         ROUTE_ABOUT -> AboutScreen(onBack = { route = ROUTE_MAIN })
+        ROUTE_ACTIVITY_DETAIL -> {
+            val activity = selectedActivity
+            if (activity != null) {
+                ActivityDetailScreen(vm = vm, activity = activity, onBack = { route = ROUTE_MAIN })
+            } else {
+                route = ROUTE_MAIN
+            }
+        }
         else -> MainScreen(
             vm = vm,
             onPickFile = onPickFile,
             onPickFolder = onPickFolder,
             onShareDatabase = onShareDatabase,
             onOpenSettings = { route = ROUTE_SETTINGS },
-            onOpenAbout = { route = ROUTE_ABOUT }
+            onOpenAbout = { route = ROUTE_ABOUT },
+            onSelectActivity = { name ->
+                selectedActivity = name
+                route = ROUTE_ACTIVITY_DETAIL
+            }
         )
     }
 }
@@ -117,7 +135,8 @@ private fun MainScreen(
     onPickFolder: () -> Unit,
     onShareDatabase: () -> Unit,
     onOpenSettings: () -> Unit,
-    onOpenAbout: () -> Unit
+    onOpenAbout: () -> Unit,
+    onSelectActivity: (String) -> Unit
 ) {
     val tracks by vm.tracks.collectAsStateWithLifecycle()
     val selected by vm.selected.collectAsStateWithLifecycle()
@@ -202,7 +221,8 @@ private fun MainScreen(
 
                 1 -> StatsTab(
                     stats = stats,
-                    onPeriodGroupingChange = vm::setPeriodGrouping
+                    onPeriodGroupingChange = vm::setPeriodGrouping,
+                    onSelectActivity = onSelectActivity
                 )
             }
         }
@@ -541,7 +561,8 @@ private fun ActivityPicker(
 @Composable
 private fun StatsTab(
     stats: Stats,
-    onPeriodGroupingChange: (PeriodGrouping) -> Unit
+    onPeriodGroupingChange: (PeriodGrouping) -> Unit,
+    onSelectActivity: (String) -> Unit
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -590,9 +611,35 @@ private fun StatsTab(
                 Card {
                     Column(Modifier.padding(12.dp)) {
                         Text(
+                            "Distance by activity",
+                            style = MaterialTheme.typography.titleSmall,
+                            modifier = Modifier.padding(bottom = 10.dp)
+                        )
+                        ActivityBarChart(
+                            entries = stats.byActivity,
+                            valueOf = { it.distanceMeters },
+                            valueLabel = { Format.distance(it.distanceMeters) },
+                            secondaryOf = { it.elevationGainMeters },
+                            secondaryLabel = "Climb gain"
+                        )
+                    }
+                }
+            }
+        }
+
+        if (stats.byActivity.isNotEmpty()) {
+            item {
+                Card {
+                    Column(Modifier.padding(12.dp)) {
+                        Text(
                             "By activity",
                             style = MaterialTheme.typography.titleSmall,
                             modifier = Modifier.padding(bottom = 8.dp)
+                        )
+                        Text(
+                            "Tap a row for details and a trend chart.",
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(bottom = 6.dp)
                         )
                         StatHeaderRow()
                         HorizontalDivider(
@@ -606,7 +653,8 @@ private fun StatsTab(
                                 distance = Format.distance(s.distanceMeters),
                                 duration = Format.duration(s.durationSeconds),
                                 avgSpeed = Format.speed(s.avgSpeedMps),
-                                ascent = Format.elevation(s.elevationGainMeters)
+                                ascent = Format.elevation(s.elevationGainMeters),
+                                onClick = { onSelectActivity(s.label) }
                             )
                         }
                         HorizontalDivider(
@@ -665,7 +713,14 @@ private fun PeriodCard(
                     )
                 }
             }
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(12.dp))
+
+            val chartEntries = periodChartEntries(rows)
+            if (chartEntries.isNotEmpty()) {
+                PeriodBarChart(entries = chartEntries)
+                Spacer(Modifier.height(12.dp))
+            }
+
             StatHeaderRow(firstColumn = grouping.label)
             HorizontalDivider(Modifier.padding(vertical = 4.dp), color = DividerDefaults.color)
             rows.forEach { s ->
@@ -677,6 +732,103 @@ private fun PeriodCard(
                     avgSpeed = Format.speed(s.avgSpeedMps),
                     ascent = Format.elevation(s.elevationGainMeters)
                 )
+            }
+        }
+    }
+}
+
+/**
+ * Most recent buckets, oldest -> newest, so the trend reads left to right. "No date"
+ * has no place on a timeline and stays out of the chart (it is still in the table).
+ */
+private fun periodChartEntries(rows: List<ActivityStat>): List<PeriodPoint> =
+    rows
+        .filterNot { it.label == NO_DATE_LABEL }
+        .take(MAX_PERIOD_CHART_BARS)
+        .asReversed()
+        .map { PeriodPoint(it.label, it.distanceMeters, it.elevationGainMeters) }
+
+/** Detail page for one activity type: its full stat card plus a by-period trend chart. */
+@Composable
+private fun ActivityDetailScreen(vm: GpxStatsViewModel, activity: String, onBack: () -> Unit) {
+    BackHandler(onBack = onBack)
+    val stats by vm.stats.collectAsStateWithLifecycle()
+    val stat = stats.byActivity.find { it.label == activity }
+    val periodRows = stats.byActivityPeriod[activity].orEmpty()
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(activity) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                }
+            )
+        }
+    ) { padding ->
+        if (stat == null) {
+            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                Text(
+                    "No tracks left for \"$activity\".",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+            return@Scaffold
+        }
+
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            contentPadding = PaddingValues(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            item { StatDetailCard(title = "${stat.count} track(s)", stat = stat, highlight = true) }
+
+            if (periodRows.isNotEmpty()) {
+                item {
+                    Card {
+                        Column(Modifier.padding(12.dp)) {
+                            Text(
+                                "Trend",
+                                style = MaterialTheme.typography.titleSmall,
+                                modifier = Modifier.padding(bottom = 8.dp)
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                PeriodGrouping.entries.forEach { option ->
+                                    FilterChip(
+                                        selected = option == stats.periodGrouping,
+                                        onClick = { vm.setPeriodGrouping(option) },
+                                        label = { Text(option.label) }
+                                    )
+                                }
+                            }
+                            Spacer(Modifier.height(12.dp))
+
+                            val chartEntries = periodChartEntries(periodRows)
+                            if (chartEntries.isNotEmpty()) {
+                                PeriodBarChart(entries = chartEntries)
+                                Spacer(Modifier.height(12.dp))
+                            }
+
+                            StatHeaderRow(firstColumn = stats.periodGrouping.label)
+                            HorizontalDivider(
+                                Modifier.padding(vertical = 4.dp),
+                                color = DividerDefaults.color
+                            )
+                            periodRows.forEach { s ->
+                                StatValueRow(
+                                    label = s.label,
+                                    count = s.count,
+                                    distance = Format.distance(s.distanceMeters),
+                                    duration = Format.duration(s.durationSeconds),
+                                    avgSpeed = Format.speed(s.avgSpeedMps),
+                                    ascent = Format.elevation(s.elevationGainMeters)
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -732,9 +884,15 @@ private fun StatValueRow(
     duration: String,
     avgSpeed: String,
     ascent: String,
-    bold: Boolean = false
+    bold: Boolean = false,
+    onClick: (() -> Unit)? = null
 ) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+    val rowModifier = if (onClick != null) {
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 2.dp)
+    } else {
+        Modifier.fillMaxWidth().padding(vertical = 2.dp)
+    }
+    Row(rowModifier) {
         Cell(label, weight = 1.4f, bold = bold)
         Cell(count.toString(), weight = 0.4f, bold = bold)
         Cell(distance, weight = 1.05f, bold = bold)
