@@ -1,0 +1,4 @@
+- Each track now has an offline flythrough: an animated marker over its distance/
+  elevation profile and a schematic top-down route shape, no map tiles, no network.
+- Sharing the database now warns first, since it includes each track's GPS route,
+  not just aggregate stats.
