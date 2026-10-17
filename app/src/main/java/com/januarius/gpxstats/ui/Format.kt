@@ -23,6 +23,10 @@ object Format {
     fun altitude(meters: Double?): String =
         if (meters == null) "–" else String.format(Locale.getDefault(), "%.0f m", meters)
 
+    /** Instantaneous slope as a signed percentage; null renders as a dash. */
+    fun grade(percent: Double?): String =
+        if (percent == null) "–" else String.format(Locale.getDefault(), "%.1f%%", percent)
+
     /** Speed in km/h; a non-positive value renders as a dash. */
     fun speed(metersPerSecond: Double): String =
         if (metersPerSecond <= 0.0) "–"

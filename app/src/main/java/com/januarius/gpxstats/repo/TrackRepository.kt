@@ -126,6 +126,7 @@ class TrackRepository(
                         maxElevationMeters = summary.maxElevationMeters,
                         startTimeMillis = summary.startTimeMillis,
                         pointCount = summary.pointCount,
+                        elevationProfile = GpxParser.encodeProfile(summary.elevationProfile),
                         sourceUri = uri.toString()
                     )
                 )
@@ -142,6 +143,7 @@ class TrackRepository(
                         maxElevationMeters = summary.maxElevationMeters,
                         startTimeMillis = summary.startTimeMillis,
                         pointCount = summary.pointCount,
+                        elevationProfile = GpxParser.encodeProfile(summary.elevationProfile),
                         sourceUri = uri.toString(),
                         importedAtMillis = System.currentTimeMillis()
                     )

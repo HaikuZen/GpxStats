@@ -43,6 +43,13 @@ data class Track(
 
     val pointCount: Int = 0,
 
+    /**
+     * Encoded distance/elevation/position profile for the flythrough screen (see
+     * `GpxParser.encodeProfile` / `decodeProfile`). Null for rows imported before this
+     * column existed, until their next import / sync.
+     */
+    val elevationProfile: String? = null,
+
     /** Content URI the track was last imported from (informational). */
     val sourceUri: String? = null,
 

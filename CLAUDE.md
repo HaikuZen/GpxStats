@@ -8,7 +8,9 @@ Guidance for working in this repository.
 (distance, duration, moving time, elevation gain / loss, max speed, max altitude) in a
 local SQLite database, and shows aggregate statistics — count / distance / duration /
 moving / ascent / descent / avg speed / max speed / max altitude — per user-assigned
-activity type and per time period (week / month / year). The database can be shared as a
+activity type and per time period (week / month / year). Each track also gets a local,
+offline "flythrough" replay (an animated marker over its elevation profile and a
+schematic top-down path — no map tiles, no network). The database can be shared as a
 file; a Settings tab tunes the elevation-smoothing parameters. Application id /
 namespace: `com.januarius.gpxstats`.
 
@@ -19,7 +21,8 @@ namespace: `com.januarius.gpxstats`.
 ./gradlew :app:installDebug         # build + adb install to a connected device
 ./gradlew :app:lintDebug            # Android lint
 ./gradlew test                      # JVM unit tests (GpxParserElevationTest covers the
-                                    # elevation gain/loss maths; parse() itself needs
+                                    # elevation gain/loss maths, GpxParserProfileTest the
+                                    # flythrough profile maths; parse() itself needs
                                     # instrumentation)
 ./gradlew clean
 ```
@@ -51,12 +54,16 @@ data/
   Track                    @Entity. PRIMARY KEY = `name` (GPX file name, no extension).
                            Stored metrics: distanceMeters, durationSeconds, movingSeconds,
                            elevationGainMeters, elevationLossMeters, maxSpeedMps,
-                           maxElevationMeters (nullable).
+                           maxElevationMeters (nullable). elevationProfile (nullable
+                           String) is an encoded distance/elevation/lat/lon series (see
+                           GpxParser.encodeProfile/decodeProfile) that backs the
+                           flythrough screen; null until the track is (re-)imported.
   TrackDao                 Flow<List<Track>> observers + suspend upsert helpers +
                            runPragma() (@RawQuery, used to checkpoint the WAL).
   AppDatabase              Room, single instance, db file "gpxstats.db" (AppDatabase.NAME),
-                           schema v3. MIGRATION_1_2 adds maxSpeedMps / maxElevationMeters;
-                           MIGRATION_2_3 adds elevationLossMeters.
+                           schema v4. MIGRATION_1_2 adds maxSpeedMps / maxElevationMeters;
+                           MIGRATION_2_3 adds elevationLossMeters; MIGRATION_3_4 adds
+                           elevationProfile.
 
 gpx/GpxParser              Stateless object. parse(input, medianWindow, threshold) or
                            parse(input, ElevationOptions) -> GpxSummary using
@@ -66,21 +73,33 @@ gpx/GpxParser              Stateless object. parse(input, medianWindow, threshol
                            selectPoints() picks trackPoints, falling back to waypoints
                            only when there is no real track at all, and summarize() turns
                            the chosen list into distance (haversine), elapsed + moving
-                           time, fastest plausible segment speed (<= 55 m/s), and highest
-                           <ele>. Elevation gain / loss come from elevationGainLoss(): an
-                           n-point median filter (DEFAULT_ELEVATION_MEDIAN_WINDOW = 5)
-                           then a hysteresis walk that only commits a climb/descent past a
-                           threshold (DEFAULT_ELEVATION_THRESHOLD_M = 10 m).
+                           time, fastest plausible segment speed (<= 55 m/s), highest
+                           <ele>, and (buildElevationProfile()) a downsampled (<=
+                           DEFAULT_PROFILE_MAX_SAMPLES = 300 points) ProfilePoint series
+                           — cumulative distance + raw (unsmoothed) elevation + lat/lon —
+                           for the flythrough screen. Elevation gain / loss come from
+                           elevationGainLoss(): an n-point median filter
+                           (DEFAULT_ELEVATION_MEDIAN_WINDOW = 5) then a hysteresis walk
+                           that only commits a climb/descent past a threshold
+                           (DEFAULT_ELEVATION_THRESHOLD_M = 10 m). encodeProfile() /
+                           decodeProfile() (de)serialize a ProfilePoint list to/from
+                           Track.elevationProfile's plain-text column (always
+                           Locale.ROOT-formatted, so a comma-decimal device locale can't
+                           corrupt the round trip); sampleProfile(profile, fraction)
+                           linearly interpolates a ProfileSample (distance, elevation,
+                           lat/lon, instantaneous grade) at a 0f..1f point along the
+                           profile — the flythrough's playhead.
         ElevationOptions   {medianWindow, thresholdMeters} bundle for the above.
 
 repo/
   TrackRepository          importFile(uri, activity, elevation) / syncFolder(treeUri,
                            activity, elevation, onProgress) via DocumentFile. New file ->
                            insert with default activity. Existing name -> update computed
-                           fields ONLY, activity kept. syncFolder calls onProgress(done,
-                           total) once with (0,total) then after every file.
-                           exportDatabase() -> checkpoints the WAL, copies the .db into
-                           cacheDir/shared/, returns a FileProvider content:// uri.
+                           fields ONLY, activity kept. Both branches also store
+                           GpxParser.encodeProfile(summary.elevationProfile). syncFolder
+                           calls onProgress(done, total) once with (0,total) then after
+                           every file. exportDatabase() -> checkpoints the WAL, copies the
+                           .db into cacheDir/shared/, returns a FileProvider content:// uri.
   SettingsStore            DataStore Preferences: sync folder uri, default activity,
                            elevationMedianWindow / elevationThresholdMeters (Flows +
                            setters, coerced to the companion MIN/MAX). elevationOptions()
@@ -118,14 +137,20 @@ ui/
                            _syncProgress. shareDatabase() -> repo.exportDatabase(), result
                            in shareDbUri.
   GpxStatsScreen           GpxStatsScreen() is a router over a `route` Int state (plus
-                           `selectedActivity: String?` / `selectedPeriod: String?`
-                           alongside it): MainScreen (default), SettingsScreen,
-                           AboutScreen, ActivityDetailScreen, PeriodDetailScreen.
+                           `selectedActivity: String?` / `selectedPeriod: String?` /
+                           `selectedTrack: String?` alongside it): MainScreen (default),
+                           SettingsScreen, AboutScreen, ActivityDetailScreen,
+                           PeriodDetailScreen, TrackFlythroughScreen.
                            MainScreen — two tabs "Tracks" / "Statistics"; top bar has
-                           Share, a gear icon (-> SettingsScreen) and a ⋮ overflow with
-                           "Info about GpxStats" (-> AboutScreen). SyncStatusBar under the
+                           Share (tapping it opens a one-time AlertDialog warning that the
+                           database now carries each track's GPS route, not just stats,
+                           before calling onShareDatabase — see the shared-database
+                           invariant below), a gear icon (-> SettingsScreen) and a ⋮
+                           overflow with "Info about GpxStats" (-> AboutScreen).
+                           SyncStatusBar under the
                            tab row: determinate "N / M files" during a folder sync,
-                           indeterminate for a single-file import.
+                           indeterminate for a single-file import. Each TrackRow in the
+                           Tracks tab has a play icon (-> TrackFlythroughScreen).
                            SettingsScreen — back arrow + the elevation median-window /
                            threshold steppers + reset (SettingsTab content).
                            AboutScreen — back arrow; BuildConfig.VERSION_NAME/CODE, a
@@ -146,8 +171,22 @@ ui/
                            stats.byPeriodActivity[periodLabel]). No grouping switcher here
                            (changing week/month/year would mean picking a different
                            bucket, not re-slicing this one) — unlike ActivityDetailScreen.
+                           TrackFlythroughScreen — back arrow; opened from a TrackRow's
+                           play icon. Decodes `track.elevationProfile` via
+                           GpxParser.decodeProfile() (shows a "re-import to generate one"
+                           message if it has fewer than 2 points); drives a `progress`
+                           Float (0f..1f) with a `withFrameNanos` loop over a fixed
+                           FLYTHROUGH_SECONDS = 20s regardless of the track's own
+                           duration, independent of play/pause/scrub/replay (a Slider
+                           bound to the same `progress`). GpxParser.sampleProfile() turns
+                           `progress` into the live distance/elevation/grade readout.
+                           Shows ElevationProfileChart (distance/elevation curve +
+                           marker) and RoutePathMinimap (schematic top-down lat/lon path +
+                           marker) from Charts.kt, both colored via activityColor(). No
+                           map tiles, no network — see the "no network" invariant.
                            SettingsScreen/AboutScreen/ActivityDetailScreen/
-                           PeriodDetailScreen all take a BackHandler.
+                           PeriodDetailScreen/TrackFlythroughScreen all take a
+                           BackHandler.
                            Stat compact tables show label / # / distance / duration /
                            avg speed / ascent; detail cards add moving / descent / max
                            speed / max altitude. Two charts (Charts.kt, see below) sit
@@ -166,11 +205,21 @@ ui/
                            max (their magnitudes aren't comparable) via BoxWithConstraints
                            + analytic column-center math, not measured child positions —
                            row/column sizes are fixed Dp constants so the math and the
-                           actual layout can't drift apart. activityColor(label) hashes
-                           the label into a fixed 8-color palette so the same activity
-                           name is always the same color; bars/lines never carry the only
-                           copy of a number — the table below each chart has the exact
-                           values.
+                           actual layout can't drift apart. activityColor(label) (internal,
+                           not private, so TrackFlythroughScreen can reuse it) hashes the
+                           label into a fixed 8-color palette so the same activity name is
+                           always the same color; bars/lines never carry the only copy of
+                           a number — the table below each chart has the exact values.
+                           ElevationProfileChart (one track's ProfilePoint series as a
+                           filled distance/elevation Canvas curve with an animated marker
+                           at a 0f..1f `progress`, via GpxParser.sampleProfile()) and
+                           RoutePathMinimap (the same series as a schematic top-down
+                           lat/lon Canvas polyline + marker, longitude scaled by
+                           cos(midLatitude) so it isn't stretched east-west — a sketch of
+                           the route's shape, not a map projection) back the flythrough
+                           screen; same "no charting library, pair with exact numbers"
+                           rules apply, though these two are markers-only (no table, since
+                           TrackFlythroughScreen's own metric row is the exact readout).
   Theme / Format           Material 3 theme (dynamic color on S+), display formatters.
 ```
 
@@ -200,10 +249,16 @@ Sharing: `shareDatabase()` → `_shareDbUri` → `MainActivity` `LaunchedEffect`
   `VERSION_CODE`. `SOURCE_URL` (the GitHub repo) and `ABOUT_LIBRARIES` live in
   `GpxStatsScreen.kt` — update them if the repo moves or deps change.
 - `GpxParser.parse()` depends on `android.util.Xml`, so it needs an instrumented test or
-  Robolectric. But `elevationGainLoss()`, `selectPoints()` and `summarize()` are
-  `internal` and pure (no Android types, no XML) — they're the right place for plain JVM
-  unit tests, and are where almost all of the actual math lives; `parse()` itself is just
-  the XML walk that fills two `GpxPoint` lists and hands off to them.
+  Robolectric. But `elevationGainLoss()`, `selectPoints()`, `summarize()`,
+  `buildElevationProfile()`, `encodeProfile()`/`decodeProfile()` and `sampleProfile()` are
+  all `internal` and pure (no Android types, no XML) — they're the right place for plain
+  JVM unit tests, and are where almost all of the actual math lives; `parse()` itself is
+  just the XML walk that fills two `GpxPoint` lists and hands off to them.
+- The elevation-profile flythrough is local-only by construction: `ProfilePoint`/
+  `ProfileSample` are plain data, `ElevationProfileChart`/`RoutePathMinimap` are hand-
+  rolled `Canvas` drawing, and the screen never touches the network — this is deliberate,
+  not an oversight, given the "no network" invariant below. Don't swap it for a real map
+  SDK (Mapbox/MapLibre/Google) without revisiting that invariant first.
 - **Standalone `<wpt>` elements are never mixed into a track's distance/time/elevation.**
   Some apps (OpenTracks "indicators" among them) sprinkle waypoints into the file that
   are unrelated in time and place to the recorded path; folding them into the same point
@@ -216,6 +271,18 @@ Sharing: `shareDatabase()` → `_shareDbUri` → `MainActivity` `LaunchedEffect`
   It is written to `cacheDir/shared/` (wiped and rewritten on each share) and only ever
   leaves the app through the user-driven `ACTION_SEND` chooser. Keep it that way; do not
   auto-upload or attach it anywhere without an explicit user action.
+  **This is a bigger exposure than it sounds since `Track.elevationProfile` landed**:
+  that column carries real per-point lat/lon (for `RoutePathMinimap`), so sharing the
+  `.db` now hands the recipient each track's actual GPS route, including likely
+  start/end points like home or work — not just aggregate stats, which was the original,
+  lower-risk tradeoff this "no encryption, no redaction" line described. This was a
+  deliberate, considered call (not an oversight): `MainScreen`'s share button shows a
+  one-time `AlertDialog` ("Share database?") spelling this out before calling
+  `onShareDatabase()`, and the user explicitly chose to keep full-precision coordinates
+  rather than drop them or coarsen them. If you revisit this, the options considered were
+  dropping lat/lon from `ProfilePoint` entirely (loses `RoutePathMinimap`), coarsening the
+  stored coordinates, or scrubbing `elevationProfile` only in `exportDatabase()`'s copy —
+  none were taken.
 - Time-period bucketing uses `java.time` with the device's default zone and ISO week
   numbering (`IsoFields.WEEK_BASED_YEAR` / `WEEK_OF_WEEK_BASED_YEAR`). All aggregation is
   in-memory in the VM — there is no SQL `GROUP BY` for periods.
@@ -236,9 +303,9 @@ Sharing: `shareDatabase()` → `_shareDbUri` → `MainActivity` `LaunchedEffect`
   is the source of truth at import time. Changes take effect on the next import / sync
   only; existing rows need a re-sync to recompute.
 - Adding a stored metric column means a schema bump + a `Migration` registered in
-  `addMigrations(...)` (see `MIGRATION_1_2`, `MIGRATION_2_3`). Do not rely on
-  `fallbackToDestructiveMigration()` now that real users may have data — it would drop
-  their activity assignments.
+  `addMigrations(...)` (see `MIGRATION_1_2`, `MIGRATION_2_3`, `MIGRATION_3_4`). Do not
+  rely on `fallbackToDestructiveMigration()` now that real users may have data — it would
+  drop their activity assignments.
 - **`versionCode` is monotonic.** Every release bumps it by at least 1; it is never
   reused or lowered once tagged/pushed (F-Droid's update key). Each release also adds
   `fastlane/metadata/android/en-US/changelogs/<versionCode>.txt` (named by versionCode)
@@ -317,3 +384,12 @@ Sharing: `shareDatabase()` → `_shareDbUri` → `MainActivity` `LaunchedEffect`
   a `StateFlow` + setter on `GpxStatsViewModel`; render it in `SettingsTab`. Use
   `SharingStarted.Eagerly` for a setting whose `.value` might be read outside an active
   collector.
+- **Changing the flythrough / profile series**: the downsampling cap is
+  `GpxParser.DEFAULT_PROFILE_MAX_SAMPLES`; the profile is built once in `summarize()` and
+  carried on `GpxSummary.elevationProfile`, so a new per-point field (e.g. instantaneous
+  speed) goes on `ProfilePoint`, gets threaded through `buildElevationProfile()`,
+  `encodeProfile()`/`decodeProfile()` (bump the serialized field count) and
+  `sampleProfile()`'s interpolation, then consumed in `ElevationProfileChart` /
+  `RoutePathMinimap` / `TrackFlythroughScreen`'s readout. This is a visual-aid series,
+  not another source of truth for stored metrics — don't derive `Track`'s aggregate
+  fields from it.

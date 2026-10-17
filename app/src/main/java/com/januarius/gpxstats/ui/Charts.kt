@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -31,6 +32,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.januarius.gpxstats.gpx.GpxParser
+import com.januarius.gpxstats.gpx.ProfilePoint
+import kotlin.math.cos
 
 /**
  * Small hand-rolled bar (+ overlaid line) charts for the Statistics tab (plain
@@ -56,7 +60,7 @@ private val ActivityChartPalette = listOf(
 )
 
 /** Same label -> same color every time, independent of sort order. */
-private fun activityColor(label: String): Color {
+internal fun activityColor(label: String): Color {
     val index = (label.lowercase().hashCode() and 0x7fffffff) % ActivityChartPalette.size
     return ActivityChartPalette[index]
 }
@@ -243,6 +247,111 @@ fun PeriodBarChart(
                     modifier = Modifier.weight(1f)
                 )
             }
+        }
+    }
+}
+
+/**
+ * Distance/elevation curve for one track's [ProfilePoint] series (filled under the
+ * curve) with an animated marker at [progress] (0f..1f of the total distance) — the core
+ * visual of the elevation-profile flythrough. Plain `Canvas`, same "no charting library"
+ * rule as the rest of this file; no map tiles, no network.
+ */
+@Composable
+fun ElevationProfileChart(
+    profile: List<ProfilePoint>,
+    progress: Float,
+    color: Color,
+    modifier: Modifier = Modifier,
+    chartHeight: Dp = 160.dp
+) {
+    if (profile.size < 2) return
+    val minEle = profile.minOf { it.elevationMeters ?: 0.0 }
+    val maxEle = profile.maxOf { it.elevationMeters ?: 0.0 }.let { if (it > minEle) it else minEle + 1.0 }
+    val totalDistance = profile.last().distanceMeters.coerceAtLeast(0.0001)
+
+    Canvas(modifier.fillMaxWidth().height(chartHeight)) {
+        val w = size.width
+        val h = size.height
+        fun xOf(d: Double) = (d / totalDistance * w).toFloat()
+        fun yOf(e: Double) = (h - ((e - minEle) / (maxEle - minEle) * h)).toFloat()
+
+        val linePath = Path().apply {
+            profile.forEachIndexed { i, p ->
+                val x = xOf(p.distanceMeters)
+                val y = yOf(p.elevationMeters ?: minEle)
+                if (i == 0) moveTo(x, y) else lineTo(x, y)
+            }
+        }
+        val fillPath = Path().apply {
+            addPath(linePath)
+            lineTo(w, h)
+            lineTo(0f, h)
+            close()
+        }
+        drawPath(fillPath, color = color.copy(alpha = 0.18f))
+        drawPath(linePath, color = color, style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round))
+
+        val sample = GpxParser.sampleProfile(profile, progress)
+        if (sample != null) {
+            val markerX = xOf(sample.distanceMeters)
+            val markerY = yOf(sample.elevationMeters ?: minEle)
+            drawLine(
+                color = color.copy(alpha = 0.35f),
+                start = Offset(markerX, 0f),
+                end = Offset(markerX, h),
+                strokeWidth = 1.dp.toPx()
+            )
+            drawCircle(color = color, radius = 5.dp.toPx(), center = Offset(markerX, markerY))
+        }
+    }
+}
+
+/**
+ * Top-down lat/lon path for one track's [ProfilePoint] series, with an animated marker at
+ * [progress] — the "bird's eye" companion to [ElevationProfileChart], giving the
+ * flythrough a sense of place with zero map tiles or network calls. Longitude is scaled
+ * by `cos(midLatitude)` so the path isn't stretched east-west away from the equator; this
+ * is a schematic sketch of the route's shape, not a map projection.
+ */
+@Composable
+fun RoutePathMinimap(
+    profile: List<ProfilePoint>,
+    progress: Float,
+    color: Color,
+    modifier: Modifier = Modifier,
+    size: Dp = 160.dp
+) {
+    if (profile.size < 2) return
+    val minLat = profile.minOf { it.lat }
+    val maxLat = profile.maxOf { it.lat }
+    val minLon = profile.minOf { it.lon }
+    val maxLon = profile.maxOf { it.lon }
+    val midLat = (minLat + maxLat) / 2.0
+    val midLatCos = cos(Math.toRadians(midLat)).coerceAtLeast(0.01)
+    val latSpan = (maxLat - minLat).coerceAtLeast(0.00001)
+    val lonSpan = ((maxLon - minLon) * midLatCos).coerceAtLeast(0.00001)
+    val span = maxOf(latSpan, lonSpan)
+    val midLon = (minLon + maxLon) / 2.0
+
+    Canvas(modifier.size(size)) {
+        val scale = minOf(this.size.width, this.size.height) / span
+        fun pointOf(lat: Double, lon: Double) = Offset(
+            x = (this.size.width / 2f + (lon - midLon) * midLatCos * scale).toFloat(),
+            y = (this.size.height / 2f - (lat - midLat) * scale).toFloat()
+        )
+
+        val path = Path().apply {
+            profile.forEachIndexed { i, p ->
+                val o = pointOf(p.lat, p.lon)
+                if (i == 0) moveTo(o.x, o.y) else lineTo(o.x, o.y)
+            }
+        }
+        drawPath(path, color = color, style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round))
+
+        val sample = GpxParser.sampleProfile(profile, progress)
+        if (sample != null) {
+            drawCircle(color = color, radius = 5.dp.toPx(), center = pointOf(sample.lat, sample.lon))
         }
     }
 }

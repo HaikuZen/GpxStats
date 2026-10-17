@@ -5,9 +5,11 @@ import org.xmlpull.v1.XmlPullParser
 import java.io.InputStream
 import java.time.Instant
 import java.time.OffsetDateTime
+import java.util.Locale
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.max
+import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -38,7 +40,32 @@ data class GpxSummary(
     /** Highest `<ele>` value seen, metres. null when the file has no elevation data. */
     val maxElevationMeters: Double?,
     val startTimeMillis: Long?,
-    val pointCount: Int
+    val pointCount: Int,
+    /** Downsampled distance/elevation/position series backing the flythrough screen. */
+    val elevationProfile: List<ProfilePoint> = emptyList()
+)
+
+/**
+ * One sampled point of a track's distance/elevation/position profile, used to drive the
+ * elevation-profile flythrough (see `Charts.kt`'s `ElevationProfileChart` /
+ * `RoutePathMinimap`). [elevationMeters] is the point's own raw reading (null if the
+ * file had none there) — downsampled, not smoothed; this is a visual aid, not another
+ * source of the gain/loss numbers in [GpxSummary].
+ */
+data class ProfilePoint(
+    val distanceMeters: Double,
+    val elevationMeters: Double?,
+    val lat: Double,
+    val lon: Double
+)
+
+/** One interpolated instant along a [ProfilePoint] series at a given distance fraction. */
+data class ProfileSample(
+    val distanceMeters: Double,
+    val elevationMeters: Double?,
+    val lat: Double,
+    val lon: Double,
+    val gradePercent: Double?
 )
 
 /**
@@ -59,6 +86,9 @@ object GpxParser {
 
     /** Default reversal a climb/descent must exceed before it counts, metres. */
     const val DEFAULT_ELEVATION_THRESHOLD_M = 10.0
+
+    /** Default cap on points kept in a track's stored [ProfilePoint] series. */
+    const val DEFAULT_PROFILE_MAX_SAMPLES = 300
 
     private const val EARTH_RADIUS_M = 6_371_000.0
 
@@ -225,7 +255,108 @@ object GpxParser {
             maxSpeedMps = maxSpeed,
             maxElevationMeters = maxEle,
             startTimeMillis = begin,
-            pointCount = points.size
+            pointCount = points.size,
+            elevationProfile = buildElevationProfile(points)
+        )
+    }
+
+    /**
+     * Downsamples [points] (the same list [summarize] uses) to at most [maxSamples]
+     * entries, evenly spaced by index, each paired with its cumulative distance from the
+     * start. Backs the elevation-profile flythrough — a local-only animated replay of the
+     * route, with no map tiles or network involved.
+     */
+    internal fun buildElevationProfile(
+        points: List<GpxPoint>,
+        maxSamples: Int = DEFAULT_PROFILE_MAX_SAMPLES
+    ): List<ProfilePoint> {
+        if (points.isEmpty()) return emptyList()
+
+        val cumulative = DoubleArray(points.size)
+        for (i in 1 until points.size) {
+            cumulative[i] = cumulative[i - 1] +
+                haversine(points[i - 1].lat, points[i - 1].lon, points[i].lat, points[i].lon)
+        }
+
+        val sampleCount = minOf(maxSamples, points.size).coerceAtLeast(1)
+        if (sampleCount == 1) {
+            val p = points[0]
+            return listOf(ProfilePoint(cumulative[0], p.ele, p.lat, p.lon))
+        }
+
+        val step = (points.size - 1).toDouble() / (sampleCount - 1)
+        return (0 until sampleCount).map { i ->
+            val idx = (i * step).roundToInt().coerceIn(0, points.size - 1)
+            val p = points[idx]
+            ProfilePoint(cumulative[idx], p.ele, p.lat, p.lon)
+        }
+    }
+
+    /**
+     * Compact serialization for `Track.elevationProfile`: points separated by `;`, fields
+     * (distance, elevation, lat, lon) separated by `,` — elevation left blank when null.
+     * Always formatted with [Locale.ROOT] so a device locale that uses `,` as a decimal
+     * separator can't corrupt the round trip.
+     */
+    internal fun encodeProfile(profile: List<ProfilePoint>): String =
+        profile.joinToString(";") { p ->
+            val ele = p.elevationMeters?.let { "%.1f".format(Locale.ROOT, it) } ?: ""
+            "%.1f,%s,%.6f,%.6f".format(Locale.ROOT, p.distanceMeters, ele, p.lat, p.lon)
+        }
+
+    /** Inverse of [encodeProfile]. Malformed segments are dropped rather than failing. */
+    internal fun decodeProfile(encoded: String?): List<ProfilePoint> {
+        if (encoded.isNullOrBlank()) return emptyList()
+        return encoded.split(";").mapNotNull { segment ->
+            val parts = segment.split(",")
+            if (parts.size != 4) return@mapNotNull null
+            val distance = parts[0].toDoubleOrNull() ?: return@mapNotNull null
+            val lat = parts[2].toDoubleOrNull() ?: return@mapNotNull null
+            val lon = parts[3].toDoubleOrNull() ?: return@mapNotNull null
+            ProfilePoint(distance, parts[1].toDoubleOrNull(), lat, lon)
+        }
+    }
+
+    /**
+     * Interpolated instant along [profile] at [fraction] (0f..1f) of its total distance —
+     * the flythrough's marker position and live readout. [profile] must be ordered by
+     * non-decreasing [ProfilePoint.distanceMeters] (as [buildElevationProfile] produces).
+     */
+    internal fun sampleProfile(profile: List<ProfilePoint>, fraction: Float): ProfileSample? {
+        if (profile.isEmpty()) return null
+        if (profile.size == 1) {
+            val p = profile[0]
+            return ProfileSample(p.distanceMeters, p.elevationMeters, p.lat, p.lon, null)
+        }
+
+        val totalDistance = profile.last().distanceMeters
+        val targetDistance = fraction.toDouble().coerceIn(0.0, 1.0) * totalDistance
+
+        var hi = 1
+        while (hi < profile.lastIndex && profile[hi].distanceMeters < targetDistance) hi++
+        val a = profile[hi - 1]
+        val b = profile[hi]
+
+        val span = b.distanceMeters - a.distanceMeters
+        val t = if (span > 0.0) ((targetDistance - a.distanceMeters) / span).coerceIn(0.0, 1.0) else 0.0
+
+        val elevation = when {
+            a.elevationMeters != null && b.elevationMeters != null ->
+                a.elevationMeters + (b.elevationMeters - a.elevationMeters) * t
+            else -> a.elevationMeters ?: b.elevationMeters
+        }
+        val grade = if (a.elevationMeters != null && b.elevationMeters != null && span > 0.0) {
+            (b.elevationMeters - a.elevationMeters) / span * 100.0
+        } else {
+            null
+        }
+
+        return ProfileSample(
+            distanceMeters = targetDistance,
+            elevationMeters = elevation,
+            lat = a.lat + (b.lat - a.lat) * t,
+            lon = a.lon + (b.lon - a.lon) * t,
+            gradePercent = grade
         )
     }
 

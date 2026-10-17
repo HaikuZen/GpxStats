@@ -32,10 +32,14 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -53,6 +57,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Tab
@@ -63,11 +68,13 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
@@ -81,6 +88,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.januarius.gpxstats.BuildConfig
 import com.januarius.gpxstats.R
 import com.januarius.gpxstats.data.Track
+import com.januarius.gpxstats.gpx.GpxParser
 import com.januarius.gpxstats.repo.SettingsStore
 import kotlin.math.roundToInt
 
@@ -89,6 +97,10 @@ private const val ROUTE_SETTINGS = 1
 private const val ROUTE_ABOUT = 2
 private const val ROUTE_ACTIVITY_DETAIL = 3
 private const val ROUTE_PERIOD_DETAIL = 4
+private const val ROUTE_FLYTHROUGH = 5
+
+/** Fixed playback length of the elevation-profile flythrough, regardless of the track's own duration. */
+private const val FLYTHROUGH_SECONDS = 20f
 
 /** Cap on how many "By period" buckets the trend chart draws (most recent, oldest-first). */
 private const val MAX_PERIOD_CHART_BARS = 12
@@ -103,6 +115,7 @@ fun GpxStatsScreen(
     var route by rememberSaveable { mutableIntStateOf(ROUTE_MAIN) }
     var selectedActivity by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedPeriod by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedTrack by rememberSaveable { mutableStateOf<String?>(null) }
 
     when (route) {
         ROUTE_SETTINGS -> SettingsScreen(vm = vm, onBack = { route = ROUTE_MAIN })
@@ -123,6 +136,14 @@ fun GpxStatsScreen(
                 route = ROUTE_MAIN
             }
         }
+        ROUTE_FLYTHROUGH -> {
+            val track = selectedTrack
+            if (track != null) {
+                TrackFlythroughScreen(vm = vm, trackName = track, onBack = { route = ROUTE_MAIN })
+            } else {
+                route = ROUTE_MAIN
+            }
+        }
         else -> MainScreen(
             vm = vm,
             onPickFile = onPickFile,
@@ -137,6 +158,10 @@ fun GpxStatsScreen(
             onSelectPeriod = { label ->
                 selectedPeriod = label
                 route = ROUTE_PERIOD_DETAIL
+            },
+            onSelectTrack = { name ->
+                selectedTrack = name
+                route = ROUTE_FLYTHROUGH
             }
         )
     }
@@ -151,7 +176,8 @@ private fun MainScreen(
     onOpenSettings: () -> Unit,
     onOpenAbout: () -> Unit,
     onSelectActivity: (String) -> Unit,
-    onSelectPeriod: (String) -> Unit
+    onSelectPeriod: (String) -> Unit,
+    onSelectTrack: (String) -> Unit
 ) {
     val tracks by vm.tracks.collectAsStateWithLifecycle()
     val selected by vm.selected.collectAsStateWithLifecycle()
@@ -174,13 +200,41 @@ private fun MainScreen(
     var tab by rememberSaveable { mutableIntStateOf(0) }
     val tabs = listOf("Tracks", "Statistics")
     var menuOpen by remember { mutableStateOf(false) }
+    var showShareWarning by rememberSaveable { mutableStateOf(false) }
+
+    if (showShareWarning) {
+        AlertDialog(
+            onDismissRequest = { showShareWarning = false },
+            title = { Text("Share database?") },
+            text = {
+                Text(
+                    "The database includes each track's GPS route (used for the flythrough's " +
+                        "mini-map), not just aggregate stats. Anyone you share this file with " +
+                        "can see those routes, including likely start/end points like home or " +
+                        "work."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showShareWarning = false
+                    onShareDatabase()
+                }) { Text("Share anyway") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showShareWarning = false }) { Text("Cancel") }
+            }
+        )
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("GpxStats") },
                 actions = {
-                    IconButton(onClick = onShareDatabase, enabled = !busy && tracks.isNotEmpty()) {
+                    IconButton(
+                        onClick = { showShareWarning = true },
+                        enabled = !busy && tracks.isNotEmpty()
+                    ) {
                         Icon(Icons.Filled.Share, contentDescription = "Share database")
                     }
                     IconButton(onClick = onOpenSettings) {
@@ -231,7 +285,8 @@ private fun MainScreen(
                     onSelectAll = vm::selectAll,
                     onClearSelection = vm::clearSelection,
                     onDeleteSelected = vm::deleteSelected,
-                    onSetActivity = vm::setActivity
+                    onSetActivity = vm::setActivity,
+                    onFlythrough = onSelectTrack
                 )
 
                 1 -> StatsTab(
@@ -314,7 +369,8 @@ private fun TracksTab(
     onSelectAll: () -> Unit,
     onClearSelection: () -> Unit,
     onDeleteSelected: () -> Unit,
-    onSetActivity: (String, String) -> Unit
+    onSetActivity: (String, String) -> Unit,
+    onFlythrough: (String) -> Unit
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -368,7 +424,8 @@ private fun TracksTab(
                 checked = track.name in selected,
                 activityOptions = activityOptions,
                 onToggle = { onToggle(track.name) },
-                onSetActivity = { onSetActivity(track.name, it) }
+                onSetActivity = { onSetActivity(track.name, it) },
+                onFlythrough = { onFlythrough(track.name) }
             )
         }
     }
@@ -481,7 +538,8 @@ private fun TrackRow(
     checked: Boolean,
     activityOptions: List<String>,
     onToggle: () -> Unit,
-    onSetActivity: (String) -> Unit
+    onSetActivity: (String) -> Unit,
+    onFlythrough: () -> Unit
 ) {
     Card(
         colors = CardDefaults.cardColors(
@@ -508,6 +566,9 @@ private fun TrackRow(
                         "${Format.date(track.startTimeMillis)} · ${track.pointCount} pts",
                         style = MaterialTheme.typography.bodySmall
                     )
+                }
+                IconButton(onClick = onFlythrough) {
+                    Icon(Icons.Filled.PlayArrow, contentDescription = "Flythrough")
                 }
             }
 
@@ -968,6 +1029,129 @@ private fun PeriodDetailScreen(vm: GpxStatsViewModel, period: String, onBack: ()
                                 )
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Local-only "virtual tour" of one track: an animated marker riding its distance/
+ * elevation curve plus a schematic top-down path, both driven by the same `progress`
+ * value. No map tiles, no network — see [ElevationProfileChart] / [RoutePathMinimap].
+ */
+@Composable
+private fun TrackFlythroughScreen(vm: GpxStatsViewModel, trackName: String, onBack: () -> Unit) {
+    BackHandler(onBack = onBack)
+    val tracks by vm.tracks.collectAsStateWithLifecycle()
+    val track = tracks.find { it.name == trackName }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(trackName) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                }
+            )
+        }
+    ) { padding ->
+        if (track == null) {
+            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                Text("Track removed.", style = MaterialTheme.typography.bodyMedium)
+            }
+            return@Scaffold
+        }
+
+        val profile = remember(track.elevationProfile) { GpxParser.decodeProfile(track.elevationProfile) }
+
+        if (profile.size < 2) {
+            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                Text(
+                    "No flythrough data yet for this track — re-import or sync it to generate one.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(24.dp)
+                )
+            }
+            return@Scaffold
+        }
+
+        var progress by remember(trackName) { mutableFloatStateOf(0f) }
+        var playing by remember(trackName) { mutableStateOf(true) }
+
+        LaunchedEffect(trackName, playing) {
+            if (!playing) return@LaunchedEffect
+            var lastFrameNanos = withFrameNanos { it }
+            while (playing && progress < 1f) {
+                val frameNanos = withFrameNanos { it }
+                val deltaSeconds = (frameNanos - lastFrameNanos) / 1_000_000_000f
+                lastFrameNanos = frameNanos
+                progress = (progress + deltaSeconds / FLYTHROUGH_SECONDS).coerceAtMost(1f)
+            }
+            if (progress >= 1f) playing = false
+        }
+
+        val sample = remember(profile, progress) { GpxParser.sampleProfile(profile, progress) }
+        val color = activityColor(track.activity)
+
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            item {
+                Card {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        ElevationProfileChart(profile = profile, progress = progress, color = color)
+
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Metric("Distance", Format.distance(sample?.distanceMeters ?: 0.0))
+                            Metric("Elevation", Format.altitude(sample?.elevationMeters))
+                            Metric("Grade", Format.grade(sample?.gradePercent))
+                        }
+
+                        Slider(
+                            value = progress,
+                            onValueChange = {
+                                progress = it
+                                playing = false
+                            }
+                        )
+
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                            IconButton(onClick = {
+                                if (progress >= 1f) {
+                                    progress = 0f
+                                    playing = true
+                                } else {
+                                    playing = !playing
+                                }
+                            }) {
+                                val (icon, description) = when {
+                                    progress >= 1f -> Icons.Filled.Replay to "Replay"
+                                    playing -> Icons.Filled.Pause to "Pause"
+                                    else -> Icons.Filled.PlayArrow to "Play"
+                                }
+                                Icon(icon, contentDescription = description)
+                            }
+                        }
+                    }
+                }
+            }
+
+            item {
+                Card {
+                    Column(Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            "Route",
+                            style = MaterialTheme.typography.titleSmall,
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)
+                        )
+                        RoutePathMinimap(profile = profile, progress = progress, color = color)
                     }
                 }
             }
