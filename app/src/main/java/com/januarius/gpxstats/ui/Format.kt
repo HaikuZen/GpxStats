@@ -32,6 +32,10 @@ object Format {
         if (metersPerSecond <= 0.0) "–"
         else String.format(Locale.getDefault(), "%.1f km/h", metersPerSecond * 3.6)
 
+    /** Speed in km/h; null or non-positive renders as a dash. */
+    fun speed(metersPerSecond: Double?): String =
+        if (metersPerSecond == null) "–" else speed(metersPerSecond)
+
     /** Average speed from a distance and a time budget (moving time, else elapsed). */
     fun avgSpeed(distanceMeters: Double, movingSeconds: Long, durationSeconds: Long): String {
         val secs = when {

@@ -56,7 +56,9 @@ data class ProfilePoint(
     val distanceMeters: Double,
     val elevationMeters: Double?,
     val lat: Double,
-    val lon: Double
+    val lon: Double,
+    /** Epoch millis of this point, or null if the file had no `<time>` there. */
+    val timeMillis: Long? = null
 )
 
 /** One interpolated instant along a [ProfilePoint] series at a given distance fraction. */
@@ -65,7 +67,10 @@ data class ProfileSample(
     val elevationMeters: Double?,
     val lat: Double,
     val lon: Double,
-    val gradePercent: Double?
+    val gradePercent: Double?,
+    /** Local (segment-average) ground speed at this instant; null if either side of the
+     *  interpolated segment is missing a timestamp. */
+    val speedMps: Double? = null
 )
 
 /**
@@ -281,39 +286,47 @@ object GpxParser {
         val sampleCount = minOf(maxSamples, points.size).coerceAtLeast(1)
         if (sampleCount == 1) {
             val p = points[0]
-            return listOf(ProfilePoint(cumulative[0], p.ele, p.lat, p.lon))
+            return listOf(ProfilePoint(cumulative[0], p.ele, p.lat, p.lon, p.time))
         }
 
         val step = (points.size - 1).toDouble() / (sampleCount - 1)
         return (0 until sampleCount).map { i ->
             val idx = (i * step).roundToInt().coerceIn(0, points.size - 1)
             val p = points[idx]
-            ProfilePoint(cumulative[idx], p.ele, p.lat, p.lon)
+            ProfilePoint(cumulative[idx], p.ele, p.lat, p.lon, p.time)
         }
     }
 
     /**
      * Compact serialization for `Track.elevationProfile`: points separated by `;`, fields
-     * (distance, elevation, lat, lon) separated by `,` — elevation left blank when null.
-     * Always formatted with [Locale.ROOT] so a device locale that uses `,` as a decimal
-     * separator can't corrupt the round trip.
+     * (distance, elevation, lat, lon, time) separated by `,` — elevation/time left blank
+     * when null. Always formatted with [Locale.ROOT] so a device locale that uses `,` as
+     * a decimal separator can't corrupt the round trip.
      */
     internal fun encodeProfile(profile: List<ProfilePoint>): String =
         profile.joinToString(";") { p ->
             val ele = p.elevationMeters?.let { "%.1f".format(Locale.ROOT, it) } ?: ""
-            "%.1f,%s,%.6f,%.6f".format(Locale.ROOT, p.distanceMeters, ele, p.lat, p.lon)
+            val time = p.timeMillis?.toString() ?: ""
+            "%.1f,%s,%.6f,%.6f,%s".format(Locale.ROOT, p.distanceMeters, ele, p.lat, p.lon, time)
         }
 
-    /** Inverse of [encodeProfile]. Malformed segments are dropped rather than failing. */
+    /**
+     * Inverse of [encodeProfile]. Malformed segments are dropped rather than failing.
+     * Also accepts the pre-speed 4-field format (distance, elevation, lat, lon, no time)
+     * stored by earlier app versions — those decode fine, just with [ProfilePoint.
+     * timeMillis] null (so [sampleProfile] can't derive a speed there) until the track is
+     * next re-imported or re-synced.
+     */
     internal fun decodeProfile(encoded: String?): List<ProfilePoint> {
         if (encoded.isNullOrBlank()) return emptyList()
         return encoded.split(";").mapNotNull { segment ->
             val parts = segment.split(",")
-            if (parts.size != 4) return@mapNotNull null
+            if (parts.size != 4 && parts.size != 5) return@mapNotNull null
             val distance = parts[0].toDoubleOrNull() ?: return@mapNotNull null
             val lat = parts[2].toDoubleOrNull() ?: return@mapNotNull null
             val lon = parts[3].toDoubleOrNull() ?: return@mapNotNull null
-            ProfilePoint(distance, parts[1].toDoubleOrNull(), lat, lon)
+            val time = parts.getOrNull(4)?.toLongOrNull()
+            ProfilePoint(distance, parts[1].toDoubleOrNull(), lat, lon, time)
         }
     }
 
@@ -326,7 +339,7 @@ object GpxParser {
         if (profile.isEmpty()) return null
         if (profile.size == 1) {
             val p = profile[0]
-            return ProfileSample(p.distanceMeters, p.elevationMeters, p.lat, p.lon, null)
+            return ProfileSample(p.distanceMeters, p.elevationMeters, p.lat, p.lon, null, null)
         }
 
         val totalDistance = profile.last().distanceMeters
@@ -351,12 +364,21 @@ object GpxParser {
             null
         }
 
+        val aTime = a.timeMillis
+        val bTime = b.timeMillis
+        val speed = if (aTime != null && bTime != null && bTime > aTime) {
+            span / ((bTime - aTime) / 1000.0)
+        } else {
+            null
+        }
+
         return ProfileSample(
             distanceMeters = targetDistance,
             elevationMeters = elevation,
             lat = a.lat + (b.lat - a.lat) * t,
             lon = a.lon + (b.lon - a.lon) * t,
-            gradePercent = grade
+            gradePercent = grade,
+            speedMps = speed
         )
     }
 

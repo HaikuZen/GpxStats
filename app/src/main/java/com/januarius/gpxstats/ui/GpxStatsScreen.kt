@@ -1110,6 +1110,7 @@ private fun TrackFlythroughScreen(vm: GpxStatsViewModel, trackName: String, onBa
 
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Metric("Distance", Format.distance(sample?.distanceMeters ?: 0.0))
+                            Metric("Speed", Format.speed(sample?.speedMps))
                             Metric("Elevation", Format.altitude(sample?.elevationMeters))
                             Metric("Grade", Format.grade(sample?.gradePercent))
                         }

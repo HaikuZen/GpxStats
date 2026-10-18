@@ -44,11 +44,11 @@ class GpxParserProfileTest {
     }
 
     @Test
-    fun `encode decode round trip preserves values, including a null elevation`() {
+    fun `encode decode round trip preserves values, including a null elevation and time`() {
         val original = listOf(
-            ProfilePoint(0.0, 100.0, 45.0, 8.0),
-            ProfilePoint(123.456, null, 45.001, 8.001),
-            ProfilePoint(500.0, 142.25, 45.002, 8.002)
+            ProfilePoint(0.0, 100.0, 45.0, 8.0, timeMillis = 1_000L),
+            ProfilePoint(123.456, null, 45.001, 8.001, timeMillis = null),
+            ProfilePoint(500.0, 142.25, 45.002, 8.002, timeMillis = 101_000L)
         )
         val decoded = GpxParser.decodeProfile(GpxParser.encodeProfile(original))
         assertEquals(original.size, decoded.size)
@@ -61,7 +61,18 @@ class GpxParserProfileTest {
             }
             assertEquals(expected.lat, actual.lat, 0.00001)
             assertEquals(expected.lon, actual.lon, 0.00001)
+            assertEquals(expected.timeMillis, actual.timeMillis)
         }
+    }
+
+    @Test
+    fun `decode still reads the pre-speed 4-field format, time just comes back null`() {
+        val legacy = "0.0,100.0,45.000000,8.000000;500.0,142.2,45.002000,8.002000"
+        val decoded = GpxParser.decodeProfile(legacy)
+        assertEquals(2, decoded.size)
+        decoded.forEach { assertNull(it.timeMillis) }
+        assertEquals(500.0, decoded[1].distanceMeters, 0.1)
+        assertEquals(142.2, decoded[1].elevationMeters!!, 0.1)
     }
 
     @Test
@@ -96,5 +107,27 @@ class GpxParserProfileTest {
     @Test
     fun `sampleProfile on an empty profile is null`() {
         assertNull(GpxParser.sampleProfile(emptyList(), 0.5f))
+    }
+
+    @Test
+    fun `sampleProfile derives speed from the surrounding points' timestamps`() {
+        val profile = listOf(
+            ProfilePoint(0.0, 100.0, 45.0, 8.0, timeMillis = 0L),
+            ProfilePoint(1000.0, 200.0, 45.01, 8.0, timeMillis = 100_000L) // 1000 m / 100 s
+        )
+        val sample = GpxParser.sampleProfile(profile, 0.5f)
+        assertEquals(10.0, sample!!.speedMps!!, 0.01)
+    }
+
+    @Test
+    fun `sampleProfile speed is null without timestamps on both sides`() {
+        val oneSideTimed = listOf(
+            ProfilePoint(0.0, 100.0, 45.0, 8.0, timeMillis = 0L),
+            ProfilePoint(1000.0, 200.0, 45.01, 8.0, timeMillis = null)
+        )
+        assertNull(GpxParser.sampleProfile(oneSideTimed, 0.5f)!!.speedMps)
+
+        val untimed = listOf(ProfilePoint(0.0, 100.0, 45.0, 8.0), ProfilePoint(1000.0, 200.0, 45.01, 8.0))
+        assertNull(GpxParser.sampleProfile(untimed, 0.5f)!!.speedMps)
     }
 }

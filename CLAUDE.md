@@ -76,18 +76,25 @@ gpx/GpxParser              Stateless object. parse(input, medianWindow, threshol
                            time, fastest plausible segment speed (<= 55 m/s), highest
                            <ele>, and (buildElevationProfile()) a downsampled (<=
                            DEFAULT_PROFILE_MAX_SAMPLES = 300 points) ProfilePoint series
-                           — cumulative distance + raw (unsmoothed) elevation + lat/lon —
-                           for the flythrough screen. Elevation gain / loss come from
-                           elevationGainLoss(): an n-point median filter
+                           — cumulative distance + raw (unsmoothed) elevation + lat/lon +
+                           timeMillis (nullable; absent for tracks with no <time>, or
+                           still-undecoded legacy 4-field profiles, see decodeProfile()
+                           below) — for the flythrough screen. Elevation gain / loss come
+                           from elevationGainLoss(): an n-point median filter
                            (DEFAULT_ELEVATION_MEDIAN_WINDOW = 5) then a hysteresis walk
                            that only commits a climb/descent past a threshold
                            (DEFAULT_ELEVATION_THRESHOLD_M = 10 m). encodeProfile() /
                            decodeProfile() (de)serialize a ProfilePoint list to/from
                            Track.elevationProfile's plain-text column (always
                            Locale.ROOT-formatted, so a comma-decimal device locale can't
-                           corrupt the round trip); sampleProfile(profile, fraction)
-                           linearly interpolates a ProfileSample (distance, elevation,
-                           lat/lon, instantaneous grade) at a 0f..1f point along the
+                           corrupt the round trip) — decodeProfile() also still reads the
+                           pre-speed 4-field format (no timeMillis) that earlier versions
+                           stored, so old rows don't need a forced re-import, just lose
+                           the derived speed until their next one; sampleProfile(profile,
+                           fraction) linearly interpolates a ProfileSample (distance,
+                           elevation, lat/lon, instantaneous grade, and local speed —
+                           distance/time between the two surrounding ProfilePoints, null
+                           if either lacks a timestamp) at a 0f..1f point along the
                            profile — the flythrough's playhead.
         ElevationOptions   {medianWindow, thresholdMeters} bundle for the above.
 
@@ -179,7 +186,8 @@ ui/
                            FLYTHROUGH_SECONDS = 20s regardless of the track's own
                            duration, independent of play/pause/scrub/replay (a Slider
                            bound to the same `progress`). GpxParser.sampleProfile() turns
-                           `progress` into the live distance/elevation/grade readout.
+                           `progress` into the live distance/speed/elevation/grade
+                           readout (Speed sits between Distance and Elevation).
                            Shows ElevationProfileChart (distance/elevation curve +
                            marker) and RoutePathMinimap (schematic top-down lat/lon path +
                            marker) from Charts.kt, both colored via activityColor(). No
@@ -386,9 +394,12 @@ Sharing: `shareDatabase()` → `_shareDbUri` → `MainActivity` `LaunchedEffect`
   collector.
 - **Changing the flythrough / profile series**: the downsampling cap is
   `GpxParser.DEFAULT_PROFILE_MAX_SAMPLES`; the profile is built once in `summarize()` and
-  carried on `GpxSummary.elevationProfile`, so a new per-point field (e.g. instantaneous
-  speed) goes on `ProfilePoint`, gets threaded through `buildElevationProfile()`,
-  `encodeProfile()`/`decodeProfile()` (bump the serialized field count) and
+  carried on `GpxSummary.elevationProfile`, so a new per-point field (speed, done this
+  way, is the template) goes on `ProfilePoint` with a default value so old positional
+  constructor calls keep compiling, gets threaded through `buildElevationProfile()`,
+  `encodeProfile()`/`decodeProfile()` (append — don't reorder — a field; make
+  `decodeProfile()` accept both the old and new field count, defaulting the new field to
+  null on old data, so already-stored profiles don't need a forced re-import) and
   `sampleProfile()`'s interpolation, then consumed in `ElevationProfileChart` /
   `RoutePathMinimap` / `TrackFlythroughScreen`'s readout. This is a visual-aid series,
   not another source of truth for stored metrics — don't derive `Track`'s aggregate
