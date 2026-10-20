@@ -99,8 +99,12 @@ private const val ROUTE_ACTIVITY_DETAIL = 3
 private const val ROUTE_PERIOD_DETAIL = 4
 private const val ROUTE_FLYTHROUGH = 5
 
-/** Fixed playback length of the elevation-profile flythrough, regardless of the track's own duration. */
+/** Baseline playback length of the elevation-profile flythrough at 1x, regardless of
+ *  the track's own duration — scaled by the user-chosen speed multiplier. */
 private const val FLYTHROUGH_SECONDS = 20f
+
+/** Flythrough speed multiplier choices; 1x is the default. */
+private val FLYTHROUGH_SPEED_OPTIONS = listOf(0.5f, 1f, 2f, 4f, 8f)
 
 /** Cap on how many "By period" buckets the trend chart draws (most recent, oldest-first). */
 private const val MAX_PERIOD_CHART_BARS = 12
@@ -1082,15 +1086,38 @@ private fun TrackFlythroughScreen(vm: GpxStatsViewModel, trackName: String, onBa
 
         var progress by remember(trackName) { mutableFloatStateOf(0f) }
         var playing by remember(trackName) { mutableStateOf(true) }
+        var speedMultiplier by remember(trackName) { mutableFloatStateOf(1f) }
 
-        LaunchedEffect(trackName, playing) {
+        val totalDistance = profile.last().distanceMeters
+        // At 1x, animation time maps to *real recorded time*, not distance, so a real
+        // slowdown (climbing, traffic, a stop) visibly slows the marker and a real
+        // acceleration (a descent, a sprint) visibly speeds it up — the whole replay
+        // still finishes in about FLYTHROUGH_SECONDS, just not at a uniform pace.
+        // Needs both a valid elapsed duration and at least one timestamped profile point;
+        // without either (an untimed track, or a legacy pre-speed decoded profile) this
+        // falls back to the old uniform-in-distance pacing.
+        val useRealPacing = track.durationSeconds > 0 &&
+            totalDistance > 0.0 &&
+            profile.any { it.timeMillis != null }
+        val fallbackSpeedMps = if (useRealPacing) totalDistance / track.durationSeconds else 0.0
+
+        LaunchedEffect(trackName, playing, speedMultiplier) {
             if (!playing) return@LaunchedEffect
             var lastFrameNanos = withFrameNanos { it }
             while (playing && progress < 1f) {
                 val frameNanos = withFrameNanos { it }
                 val deltaSeconds = (frameNanos - lastFrameNanos) / 1_000_000_000f
                 lastFrameNanos = frameNanos
-                progress = (progress + deltaSeconds / FLYTHROUGH_SECONDS).coerceAtMost(1f)
+
+                val increment = if (useRealPacing) {
+                    val localSpeed = GpxParser.sampleProfile(profile, progress)?.speedMps
+                        ?: fallbackSpeedMps
+                    val compression = track.durationSeconds / FLYTHROUGH_SECONDS
+                    (localSpeed * compression * speedMultiplier * deltaSeconds / totalDistance).toFloat()
+                } else {
+                    speedMultiplier * deltaSeconds / FLYTHROUGH_SECONDS
+                }
+                progress = (progress + increment).coerceAtMost(1f)
             }
             if (progress >= 1f) playing = false
         }
@@ -1122,6 +1149,32 @@ private fun TrackFlythroughScreen(vm: GpxStatsViewModel, trackName: String, onBa
                                 playing = false
                             }
                         )
+
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            FLYTHROUGH_SPEED_OPTIONS.forEach { option ->
+                                FilterChip(
+                                    selected = option == speedMultiplier,
+                                    onClick = { speedMultiplier = option },
+                                    label = {
+                                        Text(if (option == option.toInt().toFloat()) {
+                                            "${option.toInt()}x"
+                                        } else {
+                                            "${option}x"
+                                        })
+                                    }
+                                )
+                            }
+                        }
+                        if (!useRealPacing) {
+                            Text(
+                                "No timestamps to pace this replay by — playing at a " +
+                                    "steady rate instead.",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
 
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
                             IconButton(onClick = {

@@ -182,12 +182,32 @@ ui/
                            play icon. Decodes `track.elevationProfile` via
                            GpxParser.decodeProfile() (shows a "re-import to generate one"
                            message if it has fewer than 2 points); drives a `progress`
-                           Float (0f..1f) with a `withFrameNanos` loop over a fixed
-                           FLYTHROUGH_SECONDS = 20s regardless of the track's own
-                           duration, independent of play/pause/scrub/replay (a Slider
-                           bound to the same `progress`). GpxParser.sampleProfile() turns
+                           Float (0f..1f) with a `withFrameNanos` loop, independent of
+                           play/pause/scrub/replay (a Slider bound to the same
+                           `progress`). The per-frame increment is NOT uniform: when
+                           `useRealPacing` holds (track.durationSeconds > 0, a non-zero
+                           total profile distance, and at least one timestamped
+                           ProfilePoint), each frame reads the LOCAL real speed at the
+                           current position (GpxParser.sampleProfile(...)?.speedMps,
+                           falling back to the track's own overall average speed where a
+                           point's speed is null) and advances progress by that speed
+                           times a constant compression ratio
+                           (track.durationSeconds / FLYTHROUGH_SECONDS) times the
+                           user-chosen speedMultiplier, so a real slowdown (a climb,
+                           traffic, a stop) visibly slows the marker and a real
+                           acceleration visibly speeds it up, while the whole replay
+                           still finishes in about FLYTHROUGH_SECONDS = 20s at 1x
+                           (FLYTHROUGH_SPEED_OPTIONS = 0.5x/1x/2x/4x/8x, a FilterChip row
+                           under the slider; changing it while playing restarts the
+                           LaunchedEffect from the current progress, not from 0). Falls
+                           back to the old uniform-in-distance pacing (speedMultiplier *
+                           dt / FLYTHROUGH_SECONDS) when `useRealPacing` is false — an
+                           untimed track, or a legacy pre-speed decoded profile — with a
+                           caption explaining why. GpxParser.sampleProfile() turns
                            `progress` into the live distance/speed/elevation/grade
-                           readout (Speed sits between Distance and Elevation).
+                           readout (Speed sits between Distance and Elevation) — the same
+                           call the pacing loop makes, just against the position the UI
+                           is about to show rather than a lagging/duplicated value.
                            Shows ElevationProfileChart (distance/elevation curve +
                            marker) and RoutePathMinimap (schematic top-down lat/lon path +
                            marker) from Charts.kt, both colored via activityColor(). No
